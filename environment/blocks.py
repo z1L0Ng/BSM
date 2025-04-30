@@ -1,5 +1,5 @@
 """Block network representation and utilities."""
-from data.distance_matrix import compute_distance_matrix
+from data.distance import compute_distance_matrix
 
 class BlockNetwork:
     def __init__(self, block_positions):

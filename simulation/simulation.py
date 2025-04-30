@@ -2,8 +2,8 @@
 import simpy
 import random
 from data import data_loader, distance_matrix
-from environment.block_network import BlockNetwork
-from agents.taxi_agent import TaxiAgent
+from environment.blocks import BlockNetwork
+from agent.taxi import TaxiAgent
 from bss.bss import BatterySwapStation
 
 def setup_simulation(env, config):
