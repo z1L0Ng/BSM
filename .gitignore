@@ -66,3 +66,4 @@ gurobi.lic
 # Mac OS
 .DS_Store
 
+/data

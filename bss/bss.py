@@ -115,8 +115,7 @@ class BatterySwapStation:
                 self.utilization_samples.append(0)
         # 充电进程会持续运行，直到模拟结束
 
-
-def swap_battery(self, taxi):
+    def swap_battery(self, taxi):
         """
         为到达的出租车更换电池的过程。
         
@@ -165,29 +164,27 @@ def swap_battery(self, taxi):
             
             # 打印日志
             print(f"时间 {self.env.now:.1f}: 站点 {self.id} 完成了出租车 {taxi.id} 的电池更换")
-        
-        # (swap_bay会在这里自动释放)
     
-def get_status(self):
-    """
-    获取电池交换站的当前状态摘要。
-        
-    返回:
-        dict: 包含站点当前状态信息的字典
-    """
-    avg_wait = sum(self.wait_times) / len(self.wait_times) if self.wait_times else 0
-    avg_queue = sum(self.queue_lengths) / len(self.queue_lengths) if self.queue_lengths else 0
-    avg_util = sum(self.utilization_samples) / len(self.utilization_samples) if self.utilization_samples else 0
-        
-    return {
-        "id": self.id,
-        "location": self.location,
-        "charged_batteries": self.charged_batteries.level,
-        "empty_batteries": self.empty_batteries.level,
-        "total_capacity": self.capacity,
-        "swaps_completed": self.swap_count,
-        "avg_wait_time": f"{avg_wait:.2f}分钟",
-        "avg_queue_length": f"{avg_queue:.2f}辆车",
-        "charger_utilization": f"{avg_util*100:.1f}%",
-        "chargers": f"{self.charger_resource.count}/{self.charger_resource.capacity} 使用中"
-    }
+    def get_status(self):
+        """
+        获取电池交换站的当前状态摘要。
+            
+        返回:
+            dict: 包含站点当前状态信息的字典
+        """
+        avg_wait = sum(self.wait_times) / len(self.wait_times) if self.wait_times else 0
+        avg_queue = sum(self.queue_lengths) / len(self.queue_lengths) if self.queue_lengths else 0
+        avg_util = sum(self.utilization_samples) / len(self.utilization_samples) if self.utilization_samples else 0
+            
+        return {
+            "id": self.id,
+            "location": self.location,
+            "charged_batteries": self.charged_batteries.level,
+            "empty_batteries": self.empty_batteries.level,
+            "total_capacity": self.capacity,
+            "swaps_completed": self.swap_count,
+            "avg_wait_time": f"{avg_wait:.2f}分钟",
+            "avg_queue_length": f"{avg_queue:.2f}辆车",
+            "charger_utilization": f"{avg_util*100:.1f}%",
+            "chargers": f"{self.charger_resource.count}/{self.charger_resource.capacity} 使用中"
+        }
