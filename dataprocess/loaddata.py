@@ -218,3 +218,40 @@ def load_location_mapping(filepath):
     except Exception as e:
         print(f"Error loading location mapping: {e}")
         return {}
+
+print(">>> 已进入 loaddata 主程序 <<<")
+import sys
+print(">>> argv:", sys.argv)
+
+if __name__ == "__main__":
+    import argparse, os
+
+    parser = argparse.ArgumentParser(
+        description="加载并清洗 NYC TLC 出租车原始数据"
+    )
+    parser.add_argument(
+        "--input", "-i", required=True,
+        help="原始数据所在目录（Parquet 或 CSV 文件）"
+    )
+    parser.add_argument(
+        "--output", "-o", required=True,
+        help="清洗后数据要写入的目录"
+    )
+    args = parser.parse_args()
+
+    # 确保输出目录存在
+    os.makedirs(args.output, exist_ok=True)
+
+    # 假设文件名固定，你也可以改成遍历目录
+    raw_fp = os.path.join(args.input, "yellow_tripdata_2025-01.parquet")
+
+    # 1. 载入数据
+    df_raw = load_trip_data(raw_fp)
+
+    # 2. 清洗数据
+    df_clean = clean_trip_data(df_raw)
+
+    # 3. 保存结果（这里用 pickle，也可以改成 CSV）
+    out_fp = os.path.join(args.output, "trips_cleaned.pkl")
+    df_clean.to_pickle(out_fp)
+    print(f"已保存清洗后数据到：{out_fp}")

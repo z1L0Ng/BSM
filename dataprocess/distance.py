@@ -19,10 +19,10 @@ def compute_distance_matrix(block_positions):
             x2, y2 = block_positions[j]
             # 使用曼哈顿距离作为城市行驶距离的近似值
             dist = abs(x1 - x2) + abs(y1 - y2)
-            # 根据实际需要，可以在这里应用距离缩放因子
             dist_matrix[i][j] = dist
     
     return dist_matrix
+
 
 def compute_travel_time_matrix(distance_matrix, avg_speed_km_per_min=0.5, traffic_factor=None):
     """
@@ -31,7 +31,7 @@ def compute_travel_time_matrix(distance_matrix, avg_speed_km_per_min=0.5, traffi
     参数:
         distance_matrix (dict): 区块间距离矩阵
         avg_speed_km_per_min (float): 平均速度(千米/分钟)
-        traffic_factor (dict, optional): 不同时段的交通拥堵因子
+        traffic_factor (dict 或 float, optional): 不同时段的交通拥堵因子或固定因子
     
     返回:
         dict: 行驶时间矩阵 {block_i: {block_j: time_minutes, ...}, ...}
@@ -44,17 +44,21 @@ def compute_travel_time_matrix(distance_matrix, avg_speed_km_per_min=0.5, traffi
             # 基础行驶时间 = 距离 / 速度
             base_time = distance_matrix[origin][dest] / avg_speed_km_per_min
             
-            # 如果提供了交通因子，则应用它（这里只是示例，实际使用时需要根据时间来选择合适的因子）
-            if traffic_factor is not None:
-                hour = 8  # 假设当前时间为早上8点
+            # 处理交通因子，可为字典或单个浮点数
+            if isinstance(traffic_factor, dict):
+                # 示例使用固定 hour=8，实际调用时可传入动态 hour
+                hour = 8
                 factor = traffic_factor.get(hour, 1.0)
-                travel_time = base_time * factor
+            elif isinstance(traffic_factor, (int, float)):
+                factor = traffic_factor
             else:
-                travel_time = base_time
+                factor = 1.0
             
-            travel_time_matrix[origin][dest] = max(1.0, travel_time)  # 确保最小行驶时间为1分钟
+            travel_time = base_time * factor
+            travel_time_matrix[origin][dest] = max(1.0, travel_time)  # 最小行驶时间为1分钟
     
     return travel_time_matrix
+
 
 def create_traffic_factors():
     """
@@ -64,14 +68,13 @@ def create_traffic_factors():
     返回:
         dict: 小时到交通因子的映射
     """
-    # 创建24小时的交通因子
     traffic_factors = {}
     
-    # 早高峰 (7-10点)
+    # 早高峰 (7-9点)
     for hour in range(7, 10):
         traffic_factors[hour] = 1.5
     
-    # 晚高峰 (17-20点)
+    # 晚高峰 (17-19点)
     for hour in range(17, 20):
         traffic_factors[hour] = 1.7
     
