@@ -219,10 +219,6 @@ def load_location_mapping(filepath):
         print(f"Error loading location mapping: {e}")
         return {}
 
-print(">>> 已进入 loaddata 主程序 <<<")
-import sys
-print(">>> argv:", sys.argv)
-
 if __name__ == "__main__":
     import argparse, os
 

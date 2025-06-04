@@ -36,18 +36,23 @@ class ETaxiScheduler:
         self.trip_data = trip_data
         
         # 状态跟踪
-        self.total_assignments = 0  # 总调度次数
-        self.swap_assignments = 0   # 换电调度次数
-        self.trip_assignments = 0   # 行程调度次数
-        
-        # 负载均衡权重
-        self.distance_weight = 0.7  # 距离权重
-        self.battery_weight = 0.3   # 电池库存权重
+        self.reset_stats()
         
         # 调度策略配置
         self.proactive_swap = True   # 主动换电(在电池电量较低时)
         self.load_balancing = True   # 站点负载均衡
         self.min_battery_threshold = 25  # 主动换电的电池电量阈值(%)
+        
+        # 权重配置
+        self.distance_weight = 0.4    # 距离权重
+        self.battery_weight = 0.2     # 电池库存权重
+        self.queue_weight = 0.2       # 队列长度权重
+        self.wait_time_weight = 0.2   # 等待时间权重
+        
+        # 等待时间追踪
+        self.station_wait_times = {station.id: [] for station in stations}  # 每个站点的历史等待时间
+        self.wait_time_window = 60    # 计算平均等待时间的时间窗口（分钟）
+        self.max_acceptable_wait = 180 # 最大可接受等待时间（秒）
         
         # 将出租车ID映射到其对象的字典，用于快速查找
         self.taxi_dict = {taxi.id: taxi for taxi in taxis}
@@ -194,45 +199,87 @@ class ETaxiScheduler:
     
     def _select_best_station(self, taxi, candidate_stations):
         """
-        为出租车选择最佳换电站，综合考虑距离和站点负载。
-        
-        参数:
-            taxi (TaxiAgent): 需要换电的出租车
-            candidate_stations (list): 候选换电站列表
-        
-        返回:
-            BatterySwapStation: 选定的最佳换电站
+        为出租车选择最佳换电站，综合考虑：
+        1. 距离（越近越好）
+        2. 电池库存（越多越好）
+        3. 当前队列长度（越短越好）
+        4. 历史等待时间（越短越好）
         """
         scores = []
         
+        # 获取所有站点的平均等待时间
+        avg_wait_times = self._get_station_wait_times()
+        max_wait_time = max(avg_wait_times.values()) if avg_wait_times else self.max_acceptable_wait
+        
         for station in candidate_stations:
-            # 计算距离分数(越近越好)
+            # 1. 距离分数 (越近越好)
             distance = self.network.distance(taxi.location, station.location)
             max_distance = 100  # 假设的最大距离
-            distance_score = 1 - min(distance / max_distance, 1.0)  # 归一化到[0, 1]
+            distance_score = 1 - min(distance / max_distance, 1.0)
             
-            # 计算电池库存分数(库存越多越好)
+            # 2. 电池库存分数 (库存越多越好)
             battery_inventory = station.charged_batteries.level
             max_inventory = station.capacity
             battery_score = battery_inventory / max_inventory
             
-            # 计算队列长度分数(队列越短越好)
+            # 3. 队列长度分数 (队列越短越好)
             queue_length = len(station.swap_bay.queue)
             max_queue = 10  # 假设的最大队列长度
-            queue_score = 1 - min(queue_length / max_queue, 1.0)  # 归一化到[0, 1]
+            queue_score = 1 - min(queue_length / max_queue, 1.0)
             
-            # 综合评分(距离权重高、电池库存权重低、队列长度权重中等)
+            # 4. 等待时间分数 (等待时间越短越好)
+            avg_wait = avg_wait_times.get(station.id, 0)
+            wait_time_score = 1 - min(avg_wait / max_wait_time, 1.0)
+            
+            # 动态调整等待时间权重 - 当等待时间超过阈值时增加其权重
+            dynamic_wait_weight = self.wait_time_weight
+            if avg_wait > self.max_acceptable_wait / 2:  # 如果等待时间超过阈值的一半
+                dynamic_wait_weight = min(0.4, self.wait_time_weight * 1.5)  # 增加权重但不超过0.4
+                
+            # 重新平衡其他权重
+            remaining_weight = 1.0 - dynamic_wait_weight
+            adjusted_distance_weight = self.distance_weight * (remaining_weight / (1 - self.wait_time_weight))
+            adjusted_battery_weight = self.battery_weight * (remaining_weight / (1 - self.wait_time_weight))
+            adjusted_queue_weight = self.queue_weight * (remaining_weight / (1 - self.wait_time_weight))
+            
+            # 计算综合评分
             composite_score = (
-                self.distance_weight * distance_score +
-                self.battery_weight * battery_score +
-                (1 - self.distance_weight - self.battery_weight) * queue_score
+                adjusted_distance_weight * distance_score +
+                adjusted_battery_weight * battery_score +
+                adjusted_queue_weight * queue_score +
+                dynamic_wait_weight * wait_time_score
             )
             
             scores.append((station, composite_score))
         
         # 选择评分最高的站点
+        if not scores:
+            return None
+        
         best_station = max(scores, key=lambda x: x[1])[0]
         return best_station
+
+    def _get_station_wait_times(self):
+        """
+        计算每个站点的平均等待时间
+        返回: dict[station_id: float] - 每个站点的平均等待时间(秒)
+        """
+        current_time = self.env.now
+        avg_wait_times = {}
+        
+        for station_id, wait_times in self.station_wait_times.items():
+            # 清理旧数据 - 只保留时间窗口内的数据
+            recent_times = [(t, w) for t, w in wait_times 
+                          if current_time - t <= self.wait_time_window]
+            self.station_wait_times[station_id] = recent_times
+            
+            if recent_times:
+                avg_wait = sum(w for _, w in recent_times) / len(recent_times)
+                avg_wait_times[station_id] = avg_wait
+            else:
+                avg_wait_times[station_id] = 0
+        
+        return avg_wait_times
     
     def dispatch_trips(self):
         """
@@ -291,33 +338,51 @@ class ETaxiScheduler:
                 # 注意：这里不直接修改出租车状态，因为这需要与taxi.process()进行协调
                 # 在实际实现中，可能需要使用事件或消息机制
     
+    def reset_stats(self):
+        """重置所有统计数据"""
+        self.total_assignments = 0  # 总调度次数
+        self.swap_assignments = 0   # 换电调度次数
+        self.trip_assignments = 0   # 行程调度次数
+        self.rejected_assignments = 0  # 拒绝的调度请求
+        self.avg_response_time = []  # 平均响应时间
+        self.station_loads = {}  # 各站点的负载情况
+        
     def get_status(self):
-        """
-        获取调度器状态摘要。
-        
-        返回:
-            dict: 包含调度器当前状态信息的字典
-        """
-        idle_taxis = sum(1 for taxi in self.taxis if taxi.state == "待命")
-        serving_taxis = sum(1 for taxi in self.taxis if taxi.state == "服务中")
-        charging_taxis = sum(1 for taxi in self.taxis if taxi.state in ["前往换电", "换电中"])
-        
-        total_charged = sum(station.charged_batteries.level for station in self.stations)
-        total_empty = sum(station.empty_batteries.level for station in self.stations)
-        total_capacity = sum(station.capacity for station in self.stations)
-        
+        """返回调度器状态的快照"""
         return {
-            "current_time": self.env.now,
-            "current_hour": int(self.env.now / 60) % 24,
-            "total_taxis": len(self.taxis),
-            "idle_taxis": idle_taxis,
-            "serving_taxis": serving_taxis,
-            "charging_taxis": charging_taxis,
-            "taxi_utilization": f"{serving_taxis/len(self.taxis)*100:.1f}%",
-            "total_charged_batteries": total_charged,
-            "total_empty_batteries": total_empty,
-            "battery_availability": f"{total_charged/total_capacity*100:.1f}%",
-            "total_assignments": self.total_assignments,
-            "swap_assignments": self.swap_assignments,
-            "trip_assignments": self.trip_assignments
+            'total_assignments': self.total_assignments,
+            'swap_assignments': self.swap_assignments,
+            'trip_assignments': self.trip_assignments,
+            'rejected_assignments': self.rejected_assignments,
+            'avg_response_time': sum(self.avg_response_time)/len(self.avg_response_time) if self.avg_response_time else 0,
+            'station_loads': self.station_loads.copy() if hasattr(self, 'station_loads') else {}
         }
+
+    def stop(self):
+        """停止调度器并清理资源"""
+        pass  # 如果需要清理资源，在这里添加代码
+    
+    def record_swap_wait_time(self, station_id, wait_time):
+        """
+        记录一次换电等待时间
+        
+        参数:
+            station_id: 换电站ID
+            wait_time: 等待时间（秒）
+        """
+        current_time = self.env.now
+        if station_id in self.station_wait_times:
+            self.station_wait_times[station_id].append((current_time, wait_time))
+            
+            # 如果站点等待时间持续超高，动态调整该站点的接受新车的阈值
+            avg_times = self._get_station_wait_times()
+            if avg_times.get(station_id, 0) > self.max_acceptable_wait:
+                station = self.station_dict.get(station_id)
+                if station:
+                    # 临时降低站点接受新车的概率
+                    station.acceptance_rate = 0.5  # 50%的概率拒绝新车
+            else:
+                # 恢复正常接受率
+                station = self.station_dict.get(station_id)
+                if station:
+                    station.acceptance_rate = 1.0

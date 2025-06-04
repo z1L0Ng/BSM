@@ -4,7 +4,7 @@ import random
 import numpy as np
 
 class TaxiAgent:
-    def __init__(self, env, taxi_id, initial_block, battery_capacity=100, consumption_rate=1, swap_threshold=20):
+    def __init__(self, env, taxi_id, initial_block, battery_capacity=100, consumption_rate=1, swap_threshold=20, real_id=None):
         """
         带有简单状态机运营逻辑的出租车代理。
         
@@ -15,16 +15,16 @@ class TaxiAgent:
             battery_capacity (float): 最大电池容量(能量单位)
             consumption_rate (float): 每分钟驾驶的电池消耗率
             swap_threshold (float): 触发电池更换的电池电量阈值
+            real_id: 真实的出租车ID（如果有的话）
         """
         self.env = env
         self.id = taxi_id
+        self.real_id = real_id
         self.location = initial_block
         self.battery_capacity = battery_capacity
         self.battery_level = battery_capacity  # 开始时电池电量满
         self.consumption_rate = consumption_rate
         self.swap_threshold = swap_threshold
-        self.trips_completed = 0
-        self.swap_count = 0
         
         # 运营状态
         self.state = "待命"  # 可能的状态: 待命, 服务中, 前往换电, 换电中
@@ -32,13 +32,8 @@ class TaxiAgent:
         self.swap_order = None  # 当前换电指令
         self.current_passenger = None  # 当前乘客
         
-        # 统计数据
-        self.total_distance = 0
-        self.total_revenue = 0
-        self.idle_time = 0
-        self.service_time = 0
-        self.charging_time = 0
-        self.waiting_time = 0  # 等待充电的时间
+        # 初始化统计数据
+        self.reset_stats()
         
         # 时间戳
         self.state_change_time = env.now
@@ -46,45 +41,54 @@ class TaxiAgent:
         # 随机数生成器，用于生成行程属性
         self.rng = random.Random(taxi_id)  # 使用taxi_id作为种子以获得可重复性
     
+    def reset_stats(self):
+        """重置所有统计数据"""
+        self.trips_completed = 0
+        self.swap_count = 0
+        self.total_distance = 0
+        self.total_revenue = 0
+        self.idle_time = 0
+        self.service_time = 0
+        self.charging_time = 0
+        self.waiting_time = 0  # 等待充电的时间
+    
     def drive_to(self, destination_block, network):
         """
         驾驶到目标区块，消耗时间和电池电量。
         
         参数:
-            destination_block (int): 目标区块ID
-            network (BlockNetwork): 区块网络对象
-        
-        产出:
-            SimPy超时事件
+            destination_block: 目标区块ID
+            network: 区块网络对象
         """
         if self.location == destination_block:
-            return  # 不需要移动
+            return
+            
+        # 计算距离和时间
+        distance = network.distance(self.location, destination_block)
+        drive_time = network.travel_time(self.location, destination_block)
         
-        current_hour = int(self.env.now / 60) % 24  # 将模拟时间(分钟)转换为小时
-        travel_time = network.travel_time(self.location, destination_block, current_hour)
+        # 计算电量消耗（每公里消耗1kWh）
+        energy_consumption = distance * self.consumption_rate
         
-        if travel_time is None:
+        # 如果剩余电量不足以完成行程，先去换电
+        if self.battery_level - energy_consumption < 0:
+            print(f"出租车 {self.id} 电量不足以完成行程，需要先去换电")
             return
         
-        # 消耗行驶所需的电池电量
-        distance = network.distance(self.location, destination_block)
-        consumption = travel_time * self.consumption_rate
-        
-        old_level = self.battery_level
-        self.battery_level = max(0, self.battery_level - consumption)
-        
-        # 记录行驶距离
+        # 更新统计数据
         self.total_distance += distance
         
-        # 模拟行驶时间过去
-        yield self.env.timeout(travel_time)
+        # 扣除电池电量
+        self.battery_level = max(0, self.battery_level - energy_consumption)
         
-        # 到达后更新位置
+        # 等待行驶时间
+        yield self.env.timeout(drive_time)
+        
+        # 更新位置
         self.location = destination_block
         
-        # 如果电池电量不足以继续运营，更新状态
-        if self.battery_level <= self.swap_threshold and self.state != "前往换电" and self.state != "换电中":
-            self.state = "前往换电"
+        # 打印调试信息
+        print(f"出租车 {self.id} 移动到区块 {destination_block}，剩余电量: {self.battery_level:.1f}%")
     
     def perform_trip(self, network, trip_data=None):
         """
@@ -187,57 +191,63 @@ class TaxiAgent:
         self.state = "待命"
         self.state_change_time = self.env.now
     
+    def update_state(self, new_state):
+        """更新状态并记录时间"""
+        if new_state == self.state:
+            return
+            
+        # 计算在当前状态停留的时间
+        elapsed = self.env.now - self.state_change_time
+        
+        # 更新时间统计
+        if self.state == "待命":
+            self.idle_time += elapsed
+        elif self.state == "服务中":
+            self.service_time += elapsed
+        elif self.state == "换电中":
+            self.charging_time += elapsed
+        elif self.state == "前往换电":
+            self.idle_time += elapsed  # 前往换电站的时间计入空闲时间
+            
+        # 更新状态和时间戳
+        print(f"时间 {self.env.now:.1f}: 出租车 {self.id} 状态从 {self.state} 变为 {new_state}")
+        self.state = new_state
+        self.state_change_time = self.env.now
+
     def process(self, network, stations, trip_data=None):
-        """
-        出租车代理的主SimPy生成器进程。
+        """出租车的主要运行过程"""
+        self.update_state("待命")  # 初始状态
         
-        参数:
-            network (BlockNetwork): 区块网络对象
-            stations (list): BatterySwapStation对象列表
-            trip_data (DataFrame, optional): 包含真实行程数据的DataFrame
-        
-        产出:
-            SimPy事件
-        """
         while True:
-            current_hour = int(self.env.now / 60) % 24  # 获取当前小时
-            
-            if self.state == "待命":
-                # 如果电池电量足够，继续服务行程
-                if self.battery_level > self.swap_threshold:
-                    # 有10%的概率车辆会空闲一段时间(5-15分钟)
-                    if self.rng.random() < 0.1:
-                        idle_duration = self.rng.randint(5, 15)
-                        self.idle_time += idle_duration
-                        yield self.env.timeout(idle_duration)
+            try:
+                current_time = self.env.now
+                
+                # 检查电池状态
+                if self.battery_level <= self.swap_threshold and self.state not in ["前往换电", "换电中"]:
+                    if not self.target_station:
+                        self.update_state("待命")  # 等待分配换电站
+                        yield self.env.timeout(1)
+                        continue
+                    else:
+                        self.update_state("前往换电")
+                        yield from self.go_to_swap(network)
+                        continue
+                
+                # 正常运营
+                if self.state == "待命":
+                    # 等待1-5分钟
+                    wait_time = random.randint(1, 5)
+                    yield self.env.timeout(wait_time)
                     
-                    # 执行行程
-                    yield from self.perform_trip(network, trip_data)
-                else:
-                    # 电池电量低：前往最近的换电站
-                    self.state = "前往换电"
-                    self.state_change_time = self.env.now
-                    
-                    # 找到最近的换电站
-                    if self.target_station is None:
-                        nearest_station = min(stations, key=lambda s: 
-                                             network.distance(self.location, s.location))
-                        self.target_station = nearest_station
-                    
-            elif self.state == "前往换电":
-                # 前往换电站换电
-                yield from self.go_to_swap(network)
-            
-            elif self.state == "换电中":
-                # 这个状态会在go_to_swap内处理
-                pass
-            
-            elif self.state == "服务中":
-                # 这个状态会在perform_trip内处理
-                pass
-            
-            # 添加一个短暂的超时以避免无限循环
-            yield self.env.timeout(1)
+                    # 尝试接新乘客
+                    if self.battery_level > self.swap_threshold:
+                        self.update_state("服务中")
+                        yield from self.serve_trip(network, trip_data)
+                        self.update_state("待命")
+                
+            except Exception as e:
+                print(f"出租车 {self.id} 运行出错: {str(e)}")
+                yield self.env.timeout(1)
     
     def get_status(self):
         """
@@ -248,6 +258,7 @@ class TaxiAgent:
         """
         return {
             "id": self.id,
+            "real_id": self.real_id,
             "location": self.location,
             "battery": f"{self.battery_level:.1f}/{self.battery_capacity}",
             "battery_percent": f"{(self.battery_level/self.battery_capacity)*100:.1f}%",
