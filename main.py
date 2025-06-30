@@ -41,8 +41,8 @@ class SimulationConfig:
     # 基本参数
     m_areas: int = 20
     L_energy_levels: int = 10
-    T_periods: int = 96  # 24小时，每15分钟一个时间段
-    period_length_minutes: int = 15
+    T_periods: int = 54  # 24小时，每15分钟一个时间段
+    period_length_minutes: int = 20
     
     # 数据配置
     data_filepath: str = 'data/yellow_tripdata_2025-01.parquet'
@@ -67,7 +67,7 @@ class SimulationConfig:
     mip_gap: float = 0.05
     
     # 模拟配置
-    simulation_duration: int = 360  # 6小时
+    simulation_duration: int = 1080  # 6小时
     start_hour: int = 6
     random_seed: int = 42
     

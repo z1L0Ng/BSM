@@ -39,14 +39,15 @@ def run_quick_simulation():
     """运行快速模拟"""
     print("\n正在运行快速模拟...")
     
-    # 创建简化的配置
+    # 创建简化的配置 (已根据20分钟时间片调整)
     config = {
         "m_areas": 10,
         "L_energy_levels": 5,
-        "T_periods": 24,
+        "T_periods": 18,  # 模拟6小时 (6h * 3 slots/h)
+        "period_length_minutes": 20, # 明确指定时间片长度
         "num_taxis": 100,
         "num_stations": 5,
-        "simulation_duration": 120,
+        "simulation_duration": 360, # 模拟时长: 6小时 * 60分钟
         "solver_method": "heuristic",
         "use_sample": True,
         "sample_size": 1000

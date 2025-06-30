@@ -94,6 +94,10 @@ def clean_trip_data(df):
             df['dropoff_datetime'] = pd.to_datetime(df['dropoff_datetime'])
     except Exception as e:
         print(f"时间转换警告: {e}")
+
+    # 只保留早上6点到午夜的行程
+    df = df[df['pickup_datetime'].dt.hour >= 6]
+    print(f"筛选6am-12am的行程后剩余: {len(df)} 行")
     
     # 数据清洗步骤
     
@@ -222,8 +226,8 @@ def extract_temporal_features(df):
     df['month'] = df['pickup_datetime'].dt.month
     
     # 创建时间段ID (论文中的时间段t)
-    # 假设每个时间段为15分钟
-    df['time_period'] = (df['hour'] * 4 + df['pickup_datetime'].dt.minute // 15)
+    # 假设每个时间段为20分钟
+    df['time_period'] = (df['hour'] * 3 + df['pickup_datetime'].dt.minute // 20)
     
     # 分类时间段
     df['is_weekend'] = df['day_of_week'].isin([5, 6])

@@ -39,13 +39,12 @@ class JointOptimizer:
         self.config = config
         self.network_data = network_data
         
-        # 创建优化模型配置
         model_config = {
             'm_areas': config.m_areas,
             'L_energy_levels': config.L_energy_levels,
             'T_periods': config.T_periods,
             'beta': config.beta,
-            'demand': {},  # 将在运行时设置
+            'demand': {},
             'reachability': network_data.get('reachability_matrix', {}),
             'distance_weights': network_data.get('distance_matrix', {}),
             'solver': {
@@ -54,14 +53,11 @@ class JointOptimizer:
             }
         }
         
-        # 创建优化模型
         self.optimization_model = JointOptimizationModel(model_config)
         
-        # 状态历史
         self.state_history = []
         self.solution_history = []
         
-        # 性能统计
         self.performance_stats = {
             'total_passengers_served': 0,
             'total_swaps_completed': 0,
@@ -70,65 +66,40 @@ class JointOptimizer:
             'utilization_rates': []
         }
         
-        # 日志配置
         logging.basicConfig(level=logging.INFO)
         self.logger = logging.getLogger(__name__)
     
     def add_battery_swap_station(self, station_config: Dict):
-        """
-        添加电池交换站到优化模型。
-        
-        参数:
-            station_config (dict): 站点配置
-        """
+        """添加电池交换站到优化模型。"""
         self.optimization_model.add_bss_station(station_config)
         self.logger.info(f"添加换电站 {station_config['id']} 到优化器")
     
     def set_demand_forecast(self, demand_data: Dict):
-        """
-        设置需求预测数据。
-        
-        参数:
-            demand_data (dict): 需求数据 {(time_period, area): demand_count}
-        """
+        """设置需求预测数据。"""
         self.optimization_model.demand = demand_data
         self.logger.info(f"设置需求预测，总需求: {sum(demand_data.values())}")
     
     def optimize_single_period(self, current_time: int, system_state: Dict) -> Dict:
-        """
-        优化单个时间段的决策。
-        
-        参数:
-            current_time (int): 当前时间段
-            system_state (dict): 当前系统状态
-        
-        返回:
-            dict: 优化决策结果
-        """
+        """优化单个时间段的决策。"""
         start_time = datetime.now()
         
-        # 创建滚动时域优化的状态
         horizon_state = self._create_horizon_state(current_time, system_state)
         
-        # 求解优化问题
         solution = self.optimization_model.solve(
             horizon_state, 
             method=self.config.solver_method
         )
         
-        # 验证解的可行性
-        if not self.optimization_model.validate_solution(solution, horizon_state):
+        # 验证时使用原始的 horizon_state
+        if not self.optimization_model.validate_solution(solution, self._create_horizon_state(current_time, system_state)):
             self.logger.warning("优化解不可行，使用备用策略")
             solution = self._fallback_strategy(current_time, system_state)
         
-        # 提取当前时间段的决策
         current_decisions = self._extract_current_decisions(solution, current_time)
         
-        # 记录性能统计
         solve_time = (datetime.now() - start_time).total_seconds()
         self._update_performance_stats(solution, solve_time)
         
-        # 保存历史
         self.state_history.append({
             'time': current_time,
             'state': system_state.copy(),
@@ -143,53 +114,30 @@ class JointOptimizer:
         return current_decisions
     
     def _create_horizon_state(self, current_time: int, system_state: Dict) -> Dict:
-        """
-        创建滚动时域优化的状态。
+        """创建滚动时域优化的状态。"""
+        horizon_length = min(6, self.config.T_periods - current_time)
         
-        参数:
-            current_time (int): 当前时间
-            system_state (dict): 系统状态
-        
-        返回:
-            dict: 时域状态
-        """
-        # 确定优化时域长度
-        horizon_length = min(6, self.config.T_periods - current_time)  # 最多6个时间段
-        
-        # 创建时域状态
         horizon_state = {
             'vacant_taxis': np.zeros((horizon_length, self.config.m_areas, self.config.L_energy_levels)),
             'occupied_taxis': np.zeros((horizon_length, self.config.m_areas, self.config.L_energy_levels)),
             'bss_inventories': {}
         }
         
-        # 设置当前状态
         horizon_state['vacant_taxis'][0] = system_state.get('vacant_taxis', np.zeros((self.config.m_areas, self.config.L_energy_levels)))
         horizon_state['occupied_taxis'][0] = system_state.get('occupied_taxis', np.zeros((self.config.m_areas, self.config.L_energy_levels)))
         
-        # 设置换电站库存
         for station_id, inventory in system_state.get('bss_inventories', {}).items():
             horizon_state['bss_inventories'][station_id] = inventory
         
-        # 预测未来状态（简单预测）
         for t in range(1, horizon_length):
-            horizon_state['vacant_taxis'][t] = horizon_state['vacant_taxis'][0] * 0.9  # 简单衰减
+            horizon_state['vacant_taxis'][t] = horizon_state['vacant_taxis'][0] * 0.9
             horizon_state['occupied_taxis'][t] = horizon_state['occupied_taxis'][0] * 0.9
         
         return horizon_state
     
     def _extract_current_decisions(self, solution: Dict, current_time: int) -> Dict:
-        """
-        从完整解中提取当前时间段的决策。
-        
-        参数:
-            solution (dict): 完整优化解
-            current_time (int): 当前时间段
-        
-        返回:
-            dict: 当前时间段的决策
-        """
-        t_idx = 0  # 在时域中，当前时间段对应索引0
+        """从完整解中提取当前时间段的决策。"""
+        t_idx = 0
         
         decisions = {
             'passenger_dispatch': solution['passenger_dispatch'][t_idx],
@@ -207,37 +155,22 @@ class JointOptimizer:
         return decisions
     
     def _fallback_strategy(self, current_time: int, system_state: Dict) -> Dict:
-        """
-        备用策略，当优化求解失败时使用。
-        
-        参数:
-            current_time (int): 当前时间
-            system_state (dict): 系统状态
-        
-        返回:
-            dict: 备用解
-        """
+        """当优化求解失败时使用的备用策略。"""
         self.logger.info("使用备用策略")
         
-        # 创建简单的贪心解
         fallback_solution = {
             'passenger_dispatch': np.zeros((1, self.config.m_areas, self.config.m_areas, self.config.L_energy_levels)),
             'swap_dispatch': np.zeros((1, self.config.m_areas, self.config.m_areas, self.config.L_energy_levels)),
             'service_taxis': np.zeros((1, self.config.m_areas, self.config.L_energy_levels)),
             'served_passengers': np.zeros((1, self.config.m_areas)),
-            'objective_value': 0,
-            'service_quality': 0,
-            'idle_distance': 0
+            'objective_value': 0, 'service_quality': 0, 'idle_distance': 0
         }
         
-        # 简单的本地优先策略
         vacant_taxis = system_state.get('vacant_taxis', np.zeros((self.config.m_areas, self.config.L_energy_levels)))
         
         for i in range(self.config.m_areas):
             demand = self.optimization_model.demand.get((current_time, i), 0)
-            
-            # 本地服务
-            for l in range(self.config.L_energy_levels-1, -1, -1):  # 从高电量开始
+            for l in range(self.config.L_energy_levels-1, -1, -1):
                 available = vacant_taxis[i, l]
                 if available > 0 and demand > 0:
                     service_count = min(available, demand)
@@ -246,14 +179,12 @@ class JointOptimizer:
                     fallback_solution['served_passengers'][0, i] += service_count
                     demand -= service_count
             
-            # 低电量车辆换电
-            for l in range(2):  # 低电量阈值
+            for l in range(2):
                 low_battery_taxis = vacant_taxis[i, l]
                 if low_battery_taxis > 0:
-                    # 简单分配到最近的换电站
                     best_station = self._find_nearest_station(i)
                     if best_station is not None:
-                        swap_count = min(low_battery_taxis, 2)  # 限制数量
+                        swap_count = min(low_battery_taxis, 2)
                         fallback_solution['swap_dispatch'][0, i, best_station, l] = swap_count
         
         return fallback_solution
@@ -266,7 +197,6 @@ class JointOptimizer:
         for station_id, bss_model in self.optimization_model.bss_models.items():
             station_area = bss_model.location
             distance = self.network_data.get('distance_matrix', {}).get((area, station_area), float('inf'))
-            
             if distance < min_distance:
                 min_distance = distance
                 nearest_station = station_area
@@ -280,7 +210,6 @@ class JointOptimizer:
         self.performance_stats['total_idle_distance'] += solution['idle_distance']
         self.performance_stats['avg_response_time'].append(solve_time)
         
-        # 计算利用率
         total_service_taxis = np.sum(solution['service_taxis'])
         total_available = self.config.m_areas * self.config.L_energy_levels
         utilization = total_service_taxis / total_available if total_available > 0 else 0
@@ -288,33 +217,19 @@ class JointOptimizer:
     
     def optimize_charging_schedule(self, current_time: int, station_states: Dict, 
                                  electricity_prices: Dict = None) -> Dict:
-        """
-        优化充电调度策略。
-        
-        参数:
-            current_time (int): 当前时间段
-            station_states (dict): 各站点状态
-            electricity_prices (dict): 电价信息
-        
-        返回:
-            dict: 充电调度决策
-        """
+        """优化充电调度策略。"""
         charging_decisions = {}
         
-        for station_id, state in station_states.items():
+        for station_id, inventory in station_states.items():
             if station_id in self.optimization_model.bss_models:
                 bss_model = self.optimization_model.bss_models[station_id]
                 
-                # 获取当前库存
-                current_inventory = state.get('battery_inventory', np.zeros(self.config.L_energy_levels))
+                # --- 关键修改：直接使用传入的 inventory 数组 ---
+                current_inventory = inventory
                 
-                # 预测未来需求
                 future_demand = self._predict_station_demand(station_id, current_time)
-                
-                # 电价考虑
                 current_price = electricity_prices.get(current_time, 1.0) if electricity_prices else 1.0
                 
-                # 制定充电策略
                 charging_strategy = self._determine_charging_strategy(
                     current_inventory, future_demand, current_price, bss_model
                 )
@@ -326,37 +241,17 @@ class JointOptimizer:
                 }
         
         return charging_decisions
-    
-    def _predict_station_demand(self, station_id: int, current_time: int, 
-                               horizon: int = 6) -> np.ndarray:
-        """
-        预测换电站未来需求。
-        
-        参数:
-            station_id (int): 站点ID
-            current_time (int): 当前时间
-            horizon (int): 预测时域
-        
-        返回:
-            ndarray: 预测需求分布
-        """
-        # 简单的需求预测模型
+
+    def _predict_station_demand(self, station_id: int, current_time: int, horizon: int = 6) -> np.ndarray:
+        """预测换电站未来需求。"""
         station_location = self.optimization_model.bss_models[station_id].location
-        
         predicted_demand = np.zeros((horizon, self.config.L_energy_levels))
         
         for t in range(horizon):
             future_time = current_time + t
-            
-            # 基于历史模式预测
             if future_time < self.config.T_periods:
                 area_demand = self.optimization_model.demand.get((future_time, station_location), 0)
-                
-                # 假设低电量车辆比例
-                low_battery_ratio = 0.3  # 30%的车辆需要换电
-                swap_demand = area_demand * low_battery_ratio
-                
-                # 分配到低电量等级
+                swap_demand = area_demand * 0.3
                 for l in range(min(3, self.config.L_energy_levels)):
                     predicted_demand[t, l] = swap_demand / 3
         
@@ -366,51 +261,37 @@ class JointOptimizer:
                                    future_demand: np.ndarray, 
                                    electricity_price: float,
                                    bss_model) -> np.ndarray:
-        """
-        确定充电策略。
-        
-        参数:
-            current_inventory (ndarray): 当前库存
-            future_demand (ndarray): 预测需求
-            electricity_price (float): 电价
-            bss_model: 换电站模型
-        
-        返回:
-            ndarray: 充电决策
-        """
+        """确定充电策略。"""
         charging_decision = np.zeros(self.config.L_energy_levels)
-        
-        # 计算库存缺口
         total_future_demand = np.sum(future_demand, axis=0)
-        
-        # 优先充电策略
         available_chargers = bss_model.chargers
         
-        for l in range(self.config.L_energy_levels - 1):  # 不能充电到超过最大等级
-            target_level = l + 1  # 充电后的等级
-            
-            # 计算目标等级的缺口
+        for l in range(self.config.L_energy_levels - 1):
+            target_level = l + 1
             current_stock = current_inventory[target_level]
             expected_demand = total_future_demand[target_level]
             shortage = max(0, expected_demand - current_stock)
             
-            # 可充电的电池数量
             available_to_charge = current_inventory[l]
             
-            # 实际充电数量
             if shortage > 0 and available_to_charge > 0 and available_chargers > 0:
                 charge_amount = min(shortage, available_to_charge, available_chargers)
-                
-                # 考虑电价因素
-                if electricity_price > 1.5:  # 高电价时减少充电
-                    charge_amount = int(charge_amount * 0.7)
-                elif electricity_price < 0.8:  # 低电价时增加充电
-                    charge_amount = min(available_to_charge, available_chargers)
+                if electricity_price > 1.5: charge_amount = int(charge_amount * 0.7)
+                elif electricity_price < 0.8: charge_amount = min(available_to_charge, available_chargers)
                 
                 charging_decision[l] = charge_amount
                 available_chargers -= charge_amount
         
         return charging_decision
+    
+    def _calculate_charging_cost(self, charging_strategy: np.ndarray, electricity_price: float) -> float:
+        """计算充电成本。"""
+        return np.sum(charging_strategy) * 20.0 * electricity_price
+    
+    def _calculate_inventory_target(self, future_demand: np.ndarray) -> np.ndarray:
+        """计算库存目标。"""
+        return (np.sum(future_demand, axis=0) * 1.2).astype(int)
+
     
     def _calculate_charging_cost(self, charging_strategy: np.ndarray, 
                                electricity_price: float) -> float:

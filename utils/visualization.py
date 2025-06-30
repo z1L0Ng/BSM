@@ -7,6 +7,12 @@ from matplotlib.animation import FuncAnimation
 import folium
 from folium.plugins import HeatMap
 
+# --- 新增代码：解决中文显示问题 ---
+plt.rcParams['font.sans-serif'] = ['SimHei']  # 指定默认字体为 SimHei
+plt.rcParams['axes.unicode_minus'] = False  # 解决保存图像时负号'-'显示为方块的问题
+# ------------------------------------
+
+
 def plot_station_metrics(results, save_path=None):
     """
     绘制站点相关的指标图表。
@@ -76,7 +82,8 @@ def plot_station_metrics(results, save_path=None):
     
     # 4. 站点使用率饼图
     ax4 = axes[1, 1]
-    usage_percentage = [count / sum(swap_counts) * 100 for count in swap_counts]
+    usage_percentage = [count / sum(swap_counts) * 100 if sum(swap_counts) > 0 else 0 for count in swap_counts]
+
     
     # 只显示使用率大于等于1%的站点
     significant_indices = [i for i, percentage in enumerate(usage_percentage) if percentage >= 1]
@@ -108,10 +115,6 @@ def plot_station_metrics(results, save_path=None):
 def plot_taxi_metrics(results, save_path=None):
     """
     绘制出租车相关的指标图表。
-    
-    参数:
-        results (dict): 模拟结果字典
-        save_path (str, optional): 保存图像的路径
     """
     taxi_stats = results['taxi_stats']
     performance = results['performance_metrics']
@@ -167,10 +170,11 @@ def plot_taxi_metrics(results, save_path=None):
     ax3.scatter(trips_list, swaps_list, alpha=0.5)
     
     # 添加回归线
-    z = np.polyfit(trips_list, swaps_list, 1)
-    p = np.poly1d(z)
-    x_range = np.linspace(min(trips_list), max(trips_list), 100)
-    ax3.plot(x_range, p(x_range), "r--", label=f'趋势线: y = {z[0]:.2f}x + {z[1]:.2f}')
+    if len(trips_list) > 1:
+        z = np.polyfit(trips_list, swaps_list, 1)
+        p = np.poly1d(z)
+        x_range = np.linspace(min(trips_list), max(trips_list), 100)
+        ax3.plot(x_range, p(x_range), "r--", label=f'趋势线: y = {z[0]:.2f}x + {z[1]:.2f}')
     
     ax3.set_title('行程数量与换电次数关系')
     ax3.set_xlabel('行程数量')
@@ -187,9 +191,11 @@ def plot_taxi_metrics(results, save_path=None):
     ax4.scatter(trips_list, revenues, alpha=0.5)
     
     # 添加回归线
-    z = np.polyfit(trips_list, revenues, 1)
-    p = np.poly1d(z)
-    ax4.plot(x_range, p(x_range), "r--", label=f'趋势线: y = {z[0]:.2f}x + {z[1]:.2f}')
+    if len(trips_list) > 1:
+        z = np.polyfit(trips_list, revenues, 1)
+        p = np.poly1d(z)
+        x_range = np.linspace(min(trips_list), max(trips_list), 100) # 复用x_range
+        ax4.plot(x_range, p(x_range), "r--", label=f'趋势线: y = {z[0]:.2f}x + {z[1]:.2f}')
     
     ax4.set_title('行程数量与收入关系')
     ax4.set_xlabel('行程数量')
@@ -205,6 +211,7 @@ def plot_taxi_metrics(results, save_path=None):
     
     plt.show()
 
+# ... (文件中剩余的其他函数 create_nyc_map, create_animation 保持不变) ...
 def create_nyc_map(results, block_positions, latitude_offset=40.5, longitude_offset=-74.05, scale=0.01):
     """
     在纽约地图上可视化模拟结果。
@@ -282,11 +289,6 @@ def create_nyc_map(results, block_positions, latitude_offset=40.5, longitude_off
 def create_animation(simulation_data, block_positions, save_path=None):
     """
     创建模拟动画，显示出租车和站点状态的变化。
-    
-    参数:
-        simulation_data (list): 包含每个时间步的系统状态的列表
-        block_positions (dict): 区块位置字典
-        save_path (str, optional): 保存动画的路径
     """
     # 创建图表和坐标轴
     fig, ax = plt.subplots(figsize=(12, 8))

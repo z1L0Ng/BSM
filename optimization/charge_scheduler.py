@@ -14,9 +14,10 @@ class ChargingTask:
     battery_level: int
     target_level: int
     priority: int
-    estimated_time: float
+    estimated_time: float  # 执行时长 (分钟)
     cost: float
-    created_at: datetime
+    created_at: datetime      # 到达时间
+    deadline: datetime      # 新增：任务截止时间
 
 @dataclass
 class ElectricityPricing:
@@ -221,15 +222,18 @@ class ChargeTaskGenerator:
         energy_cost = energy_per_level * level_diff
         
         # 应用电价
-        final_price = (pricing.base_price * 
-                      pricing.peak_multiplier * 
-                      pricing.off_peak_discount * 
-                      pricing.renewable_bonus)
+        final_price = (pricing.base_price * pricing.peak_multiplier * pricing.off_peak_discount * pricing.renewable_bonus)
         
         total_cost = energy_cost * final_price
         
         # 计算优先级
         priority = self._calculate_task_priority(from_level, to_level, current_time, pricing)
+        
+        # 计算截止时间
+        # 优先级越高，截止时间越短。基础缓冲时间为60分钟。
+        # 优先级每高10分，截止时间缩短5分钟。
+        buffer_minutes = max(15, 60 - (priority // 10) * 5)
+        deadline = datetime.now() + timedelta(minutes=buffer_minutes + estimated_time)
         
         task = ChargingTask(
             task_id=task_id,
@@ -237,9 +241,10 @@ class ChargeTaskGenerator:
             battery_level=from_level,
             target_level=to_level,
             priority=priority,
-            estimated_time=estimated_time,
+            estimated_time=estimated_time,  # -> 执行时长
             cost=total_cost,
-            created_at=datetime.now()
+            created_at=datetime.now(),     # -> 到达时间
+            deadline=deadline              # -> 截止时间
         )
         
         return task
@@ -593,7 +598,8 @@ if __name__ == "__main__":
     print(f"生成了 {len(tasks)} 个充电任务")
     for task in tasks[:3]:  # 显示前3个任务
         print(f"任务 {task.task_id}: {task.battery_level}->{task.target_level}, "
-              f"优先级: {task.priority}, 成本: ${task.cost:.2f}")
+              f"优先级: {task.priority}, 成本: ${task.cost:.2f}, "
+              f"截止时间: {task.deadline.strftime('%H:%M:%S')}")
     
     # 优化充电调度
     optimized_tasks = task_generator.optimize_charging_schedule(tasks, available_chargers)
