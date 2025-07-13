@@ -67,3 +67,4 @@ gurobi.lic
 .DS_Store
 
 /data
+/output

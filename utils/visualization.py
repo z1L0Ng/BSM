@@ -6,8 +6,8 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
-plt.rcParams['font.sans-serif'] = ['SimHei']  # 用来正常显示中文标签
-plt.rcParams['axes.unicode_minus'] = False  # 用来正常显示负号
+plt.rcParams['font.sans-serif'] = ['Arial Unicode MS']  # macOS 自带字体
+plt.rcParams['axes.unicode_minus'] = False
 
 def plot_station_metrics(data: dict, save_path: str):
     """绘制换电站相关指标的图表。"""

@@ -14,6 +14,7 @@ from models.optimization_model import JointOptimizer
 from utils.visualization import plot_station_metrics, plot_taxi_metrics, plot_performance_metrics
 from simulation.simulation import run_simulation
 from dataprocess.loaddata import load_trip_data, clean_trip_data, prepare_simulation_data
+from dataprocess.distance import create_all_matrices # 导入距离计算工具
 import pandas as pd
 import numpy as np
 
@@ -46,8 +47,8 @@ def load_and_prepare_data(config):
         # 加载真实数据
         df = load_trip_data(config.data_file, sample_size=config.sample_size)
         
-        # 简化的数据清洗 - 避免复杂操作
-        df = simple_clean_data(df)
+        # 清洗数据
+        df = clean_trip_data(df)
         
         # 准备模拟数据
         simulation_data = prepare_simulation_data(df, config.__dict__)
@@ -58,184 +59,176 @@ def load_and_prepare_data(config):
         logging.info("使用模拟数据生成需求...")
         return None
 
-def simple_clean_data(df):
-    """简化的数据清洗函数，避免复杂操作"""
-    print("开始简化数据清洗...")
-    
-    # 创建副本
-    df = df.copy()
-    df = df.reset_index(drop=True)
-    
-    # 确保需要的列存在
-    if 'pickup_datetime' not in df.columns:
-        if 'tpep_pickup_datetime' in df.columns:
-            df['pickup_datetime'] = df['tpep_pickup_datetime']
-    
-    # 转换时间列
-    if 'pickup_datetime' in df.columns:
-        df['pickup_datetime'] = pd.to_datetime(df['pickup_datetime'])
-    
-    # 只保留白天的行程
-    if 'pickup_datetime' in df.columns:
-        df = df[df['pickup_datetime'].dt.hour >= 6]
-        df = df.reset_index(drop=True)
-    
-    # 基本的数据过滤
-    if 'trip_distance' in df.columns:
-        df = df[df['trip_distance'] > 0]
-        df = df.reset_index(drop=True)
-    
-    # 创建区域块ID
-    if 'pickup_latitude' in df.columns and 'pickup_longitude' in df.columns:
-        # 简单的区域划分
-        df['pickup_block'] = ((df['pickup_latitude'] - 40.4) * 100).astype(int) % 100
-        df['block_id'] = df['pickup_block']
-    else:
-        # 随机分配区域
-        df['block_id'] = np.random.randint(0, 100, len(df))
-    
-    # 处理出租车ID
-    if 'taxi_id' not in df.columns:
-        df['taxi_id'] = np.random.randint(1, 1001, len(df))
-    
-    # 创建时间特征
-    if 'pickup_datetime' in df.columns:
-        df['hour'] = df['pickup_datetime'].dt.hour
-        df['time_period'] = (df['hour'] * 3 + df['pickup_datetime'].dt.minute // 20) % 72
-    
-    print(f"数据清洗完成: {len(df)} 条记录")
-    return df
-
 def create_citywide_demand_model(config, simulation_data=None):
     """创建城市级需求模型"""
-    if simulation_data is not None:
-        # 使用真实数据创建需求模型
+    demand_model = ODMatrixDemandModel(config.m_areas, config.T_periods)
+    
+    if simulation_data and 'demand_data' in simulation_data:
         logging.info("基于真实数据创建需求模型...")
-        demand_model = ODMatrixDemandModel(config.m_areas, config.T_periods)
+        # 从聚合的需求数据中填充需求矩阵
+        demand_df = simulation_data['demand_data']
         
-        # 这里可以集成真实数据的需求矩阵
-        # TODO: 实现基于真实数据的需求矩阵生成
+        # 创建一个 O-D 矩阵
+        od_matrix = np.zeros((config.T_periods, config.m_areas, config.m_areas))
         
-        return demand_model
+        # 从 trip_data 中计算 OD 对
+        trip_df = simulation_data['trip_data']
+        if 'pickup_block' in trip_df.columns and 'dropoff_block' in trip_df.columns:
+            # 按时间、起点、终点聚合
+            od_counts = trip_df.groupby(['time_period', 'pickup_block', 'dropoff_block']).size().reset_index(name='count')
+            
+            for _, row in od_counts.iterrows():
+                t = int(row['time_period'])
+                origin = int(row['pickup_block'])
+                dest = int(row['dropoff_block'])
+                count = int(row['count'])
+                
+                if 0 <= t < config.T_periods and 0 <= origin < config.m_areas and 0 <= dest < config.m_areas:
+                    od_matrix[t, origin, dest] = count
+
+        demand_model.demand_matrix = od_matrix
+        logging.info("真实数据需求模型创建完成。")
+        
     else:
         logging.info("创建城市级模拟需求模型...")
-        return ODMatrixDemandModel(config.m_areas, config.T_periods)
+        # 如果没有真实数据，这里可以调用 demand_model 内部的模拟数据生成方法
+        demand_model.simulate_demand()
+
+    return demand_model
+
 
 def create_citywide_travel_model(config, simulation_data=None):
     """创建城市级出行模型"""
-    if simulation_data is not None:
+    # 【修改处】在初始化TravelModel时，传入能耗率参数
+    travel_model = TravelModel(config.m_areas, config.energy_consumption_rate)
+
+    if simulation_data and simulation_data.get('block_positions'):
         logging.info("基于真实数据创建出行模型...")
-        travel_model = TravelModel(config.m_areas)
+        # 使用区块的平均坐标计算距离和时间矩阵
+        block_positions = simulation_data['block_positions']
         
-        # 这里可以集成真实数据的距离和时间矩阵
-        # TODO: 实现基于真实数据的距离矩阵生成
+        # 确保所有区域ID都在区块位置字典中
+        for i in range(config.m_areas):
+            if i not in block_positions:
+                # 如果有缺失，提供一个默认或随机的位置
+                block_positions[i] = (np.random.uniform(-74, -73.8), np.random.uniform(40.7, 40.8))
+
+        matrices = create_all_matrices(block_positions)
         
-        return travel_model
+        # 更新 travel_model 的距离和时间矩阵
+        dist_matrix_np = np.zeros((config.m_areas, config.m_areas))
+        time_matrix_np = np.zeros((config.m_areas, config.m_areas))
+
+        # 使用字典的 get 方法安全地访问
+        dist_dict = matrices.get('distance_matrix', {})
+        # 使用平均时间作为代表 (例如使用中午12点作为平均交通状况)
+        time_dict = matrices.get('travel_time_matrices', {}).get(12, {}) 
+
+        for i in range(config.m_areas):
+            for j in range(config.m_areas):
+                dist_matrix_np[i, j] = dist_dict.get(i, {}).get(j, 0)
+                time_matrix_np[i, j] = time_dict.get(i, {}).get(j, 0)
+        
+        travel_model.distance_matrix = dist_matrix_np
+        travel_model.time_matrix = time_matrix_np
+        logging.info("真实数据出行模型创建完成。")
+        
     else:
         logging.info("创建城市级模拟出行模型...")
-        return TravelModel(config.m_areas)
+        # 如果没有真实数据，调用 travel_model 内部的模拟数据生成方法
+        travel_model.simulate_distances()
+        # 假设一个平均速度 (km/h)
+        avg_speed_kmh = 30 
+        # 将速度转换为 km/min
+        avg_speed_kmpm = avg_speed_kmh / 60
+        # 避免除以零
+        travel_model.time_matrix = travel_model.distance_matrix / avg_speed_kmpm if avg_speed_kmpm > 0 else np.zeros_like(travel_model.distance_matrix)
+
+
+    return travel_model
+
 
 def _generate_citywide_visualizations(results: dict, output_dir: str, config):
     """生成城市级模拟结果的可视化图表"""
-    logging.info("开始生成城市级可视化图表...")
-    
-    if not config.visualization_enabled:
-        logging.info("可视化功能已禁用")
-        return
-    
-    if not os.path.exists(output_dir):
-        os.makedirs(output_dir)
-
+    logging.info("开始生成可视化图表...")
     try:
-        # 从真实的模拟结果中提取数据
-        stations_config = results['stations_config']
-        station_ids = [s['id'] for s in stations_config]
+        # 提取站点和出租车历史数据
+        station_history = results.get('station_history', {})
+        taxi_history = results.get('taxi_history', {})
+        performance_history = results.get('performance_history', [])
 
-        # 1. 站点指标
-        station_swap_counts = results['station_swap_counts']
-        swap_counts_full = {sid: station_swap_counts.get(sid, 0) for sid in station_ids}
-
-        # 最终电池库存
-        final_inventories = results['final_station_inventories']
+        if station_history:
+            plot_station_metrics(station_history, output_dir)
         
-        # 计算每个站点的电池状态
-        station_capacities = {s['id']: s['capacity'] for s in config.stations}
-        charged_batteries = {sid: final_inventories.get(sid, 0) for sid in station_ids}
-        empty_batteries = {sid: station_capacities.get(sid, 0) - charged_batteries.get(sid, 0) for sid in station_ids}
+        if taxi_history:
+            plot_taxi_metrics(taxi_history, output_dir)
+
+        if performance_history:
+            plot_performance_metrics(performance_history, output_dir)
+            
+        logging.info(f"可视化图表已成功保存到: {output_dir}")
         
-        # 平均等待时间
-        avg_wait_time = results.get('average_wait_time', 0)
-        station_avg_wait = {sid: avg_wait_time for sid in station_ids}
-
-        station_stats = {
-            'station_locations': {s['id']: s['location'] for s in stations_config},
-            'station_swap_counts': swap_counts_full,
-            'station_avg_wait': station_avg_wait,
-            'charged_batteries': charged_batteries,
-            'empty_batteries': empty_batteries,
-        }
-
-        # 2. 性能指标
-        performance_metrics = {
-            'average_wait_time': results.get('average_wait_time', 0),
-            'total_passengers_served': results.get('total_passengers_served', 0),
-            'total_idle_distance': results.get('total_idle_distance', 0),
-        }
-        
-        # 3. 构建 viz_data
-        viz_data = {
-            'station_stats': station_stats,
-            'performance_metrics': performance_metrics,
-            'taxi_stats': {}, 
-        }
-
-        # 调用绘图函数
-        plot_station_metrics(viz_data, os.path.join(output_dir, "citywide_station_metrics.png"))
-        plot_performance_metrics(viz_data, os.path.join(output_dir, "citywide_performance_metrics.png"))
-
-        logging.info(f"城市级可视化图表已保存到: {output_dir}")
-
     except Exception as e:
-        logging.error(f"生成城市级可视化时出错: {e}", exc_info=True)
+        logging.error(f"生成可视化图表时发生错误: {e}", exc_info=True)
+
 
 def generate_performance_report(results: dict, output_dir: str, config):
-    """生成性能报告"""
+    """生成并保存性能报告"""
     logging.info("生成性能报告...")
+    report_path = os.path.join(output_dir, "performance_report.txt")
     
-    report_file = os.path.join(output_dir, "citywide_performance_report.txt")
+    perf_hist = results.get('performance_history', [])
+    if not perf_hist:
+        logging.warning("性能历史数据为空，无法生成报告。")
+        return
+        
+    # 计算平均指标
+    avg_service_quality = np.mean([p['service_quality'] for p in perf_hist])
+    total_idle_distance = np.sum([p['idle_distance'] for p in perf_hist])
+    total_charging_cost = np.sum([p['charging_cost'] for p in perf_hist])
+    avg_objective = np.mean([p['objective_value'] for p in perf_hist])
+
+    # 模拟结束时的最终状态
+    final_taxi_states = results['taxi_history'][max(results['taxi_history'].keys())]
+    final_station_states = results['station_history'][max(results['station_history'].keys())]
     
-    with open(report_file, 'w', encoding='utf-8') as f:
-        f.write("=== 城市级BSM模拟性能报告 ===\n\n")
-        f.write(f"模拟时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n")
-        
-        f.write("=== 配置参数 ===\n")
-        f.write(f"城市区域数量: {config.m_areas}\n")
-        f.write(f"出租车数量: {config.num_taxis}\n")
-        f.write(f"换电站数量: {len(config.stations)}\n")
-        f.write(f"模拟时长: {config.simulation_duration} 分钟\n")
-        f.write(f"使用真实数据: {'是' if config.use_real_data else '否'}\n\n")
-        
-        f.write("=== 模拟结果 ===\n")
-        f.write(f"总服务乘客数: {results.get('total_passengers_served', 0)}\n")
-        f.write(f"平均等待时间: {results.get('average_wait_time', 0):.2f} 分钟\n")
-        f.write(f"总空驶距离: {results.get('total_idle_distance', 0):.2f} 公里\n")
-        f.write(f"总换电次数: {sum(results.get('station_swap_counts', {}).values())}\n")
-        
-        # 换电站利用率
-        f.write("\n=== 换电站利用率 ===\n")
-        station_swaps = results.get('station_swap_counts', {})
-        for station_id, swaps in station_swaps.items():
-            f.write(f"{station_id}: {swaps} 次换电\n")
-        
-        f.write("\n=== 系统效率指标 ===\n")
-        total_swaps = sum(station_swaps.values())
-        if total_swaps > 0:
-            f.write(f"平均每个换电站换电次数: {total_swaps/len(config.stations):.2f}\n")
-        
-        if results.get('total_passengers_served', 0) > 0:
-            f.write(f"每次服务的平均空驶距离: {results.get('total_idle_distance', 0)/results.get('total_passengers_served', 1):.2f} 公里\n")
+    report_content = f"""
+=================================================
+       城市级 BSM 模拟性能报告
+=================================================
+
+模拟配置:
+- 区域数量: {config.m_areas}
+- 出租车数量: {config.num_taxis}
+- 换电站数量: {len(config.stations)}
+- 时间段总数: {config.T_periods}
+- 优化算法: {'Gurobi' if config.use_gurobi else 'Heuristic'}
+
+-------------------------------------------------
+核心性能指标:
+-------------------------------------------------
+- 平均服务质量 (服务乘客数/时段): {avg_service_quality:.2f}
+- 总空驶距离 (km): {total_idle_distance:.2f}
+- 总充电成本: {total_charging_cost:.2f}
+- 平均目标函数值: {avg_objective:.2f}
+
+-------------------------------------------------
+模拟结束时状态:
+-------------------------------------------------
+- 空闲出租车总数: {final_taxi_states['vacant']}
+- 载客出租车总数: {final_taxi_states['occupied']}
+- 换电中出租车总数: {final_taxi_states['swapping']}
+- 总可用充满电池数: {sum(s['charged'] for s in final_station_states.values())}
+- 总可用空电池数: {sum(s['empty'] for s in final_station_states.values())}
+
+=================================================
+    """
     
-    logging.info(f"性能报告已保存到: {report_file}")
+    with open(report_path, 'w', encoding='utf-8') as f:
+        f.write(report_content)
+        
+    logging.info(f"性能报告已保存到: {report_path}")
+
 
 def main():
     """城市级模拟主函数"""
@@ -267,6 +260,7 @@ def main():
         
         # 6. 运行城市级模拟
         logging.info("开始运行城市级模拟...")
+        # 假设主模拟函数在 simulation/simulation.py 中
         results = run_simulation(config, optimizer)
         
         # 7. 生成结果和可视化
@@ -290,6 +284,3 @@ def main():
         logging.error(f"城市级模拟过程中发生错误: {e}", exc_info=True)
         print(f"模拟失败: {e}")
         sys.exit(1)
-
-if __name__ == "__main__":
-    main() 

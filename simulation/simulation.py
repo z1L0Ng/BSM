@@ -1,6 +1,7 @@
 # simulation/simulation.py
 """
 基于 SimPy 的事件驱动模拟框架。
+(已根据Bug分析进行全面修复和重构)
 """
 import simpy
 import random
@@ -14,308 +15,259 @@ class ResultsCollector:
         self.env = env
         self.wait_times = []
         self.service_times = []
-        self.swap_events = defaultdict(int) # station_id -> count
+        self.swap_events = defaultdict(int)
         self.passengers_served = 0
         self.total_idle_dist = 0
-        
-        # 用于记录每个时间点的状态
         self.history = []
 
     def record_wait_time(self, wait):
-        self.wait_times.append(wait)
+        if wait > 0:
+            self.wait_times.append(wait)
 
     def record_service(self, dist):
         self.service_times.append(dist)
         self.passengers_served += 1
         
-    def record_swap(self, station_id):
-        self.swap_events[station_id] += 1
-        
     def record_idle_dist(self, dist):
         self.total_idle_dist += dist
+
+    # 【逻辑修正】添加缺失的 record_swap 方法
+    def record_swap(self, station_id):
+        """记录一次换电事件。"""
+        self.swap_events[station_id] += 1
 
     def record_system_state(self, taxis, stations):
         state = {
             'time': self.env.now,
             'taxis': [{'id': t.id, 'state': t.state, 'energy': t.energy, 'location': t.location} for t in taxis],
-            'stations': [{'id': s.id, 'charged_batteries': s.charged_batteries.level} for s in stations]
+            'stations': [{'id': s.id, 'charged': s.charged_batteries.level, 'empty': s.empty_batteries.level} for s in stations]
         }
         self.history.append(state)
 
     def get_final_results(self):
         avg_wait = np.mean(self.wait_times) if self.wait_times else 0
+        final_inventories = {}
+        if self.history:
+            final_state = self.history[-1]
+            final_inventories = {s['id']: s['charged'] for s in final_state.get('stations', [])}
         return {
             'average_wait_time': avg_wait,
             'total_passengers_served': self.passengers_served,
             'total_idle_distance': self.total_idle_dist,
             'station_swap_counts': dict(self.swap_events),
+            'final_station_inventories': final_inventories,
             'simulation_history': self.history
         }
 
 class BatterySwapStation:
-    """代表一个换电站，管理电池库存。"""
-    def __init__(self, env, id, capacity, initial_charged):
+    def __init__(self, env, id, location, capacity, initial_charged, num_chargers=2, charge_time=30):
         self.env = env
         self.id = id
+        self.location = location
         self.capacity = capacity
-        # 使用 SimPy Container 来管理满电电池库存
         self.charged_batteries = simpy.Container(env, capacity=capacity, init=initial_charged)
-        self.location = int(id.split('_')[1]) # 从ID中提取区域索引
+        self.empty_batteries = simpy.Container(env, capacity=capacity, init=capacity - initial_charged)
+        self.chargers = simpy.Resource(env, capacity=num_chargers)
+        self.charge_time = charge_time
+        self.env.process(self._charge_process())
+
+    def _charge_process(self):
+        while True:
+            yield self.empty_batteries.get(1)
+            with self.chargers.request() as req:
+                yield req
+                yield self.env.timeout(self.charge_time)
+                yield self.charged_batteries.put(1)
 
 class TaxiAgent:
-    """代表一个出租车智能体。"""
-    def __init__(self, env, id, initial_location, initial_energy, config, stations, results_collector):
+    def __init__(self, env, id, initial_location, initial_energy, config, stations, travel_model, results_collector):
         self.env = env
         self.id = id
         self.location = initial_location
         self.energy = initial_energy
         self.config = config
         self.stations = stations
+        self.travel_model = travel_model
         self.results = results_collector
-        
-        self.state = 'idle' # idle, serving_passenger, going_to_swap, swapping
+        self.state = 'idle'
         self.action = env.process(self.run())
-        self.target_destination = None
+        self.target_station = None
         self.task = None
 
     def run(self):
-        """出租车的主要行为循环。"""
         while True:
             try:
                 if self.state == 'idle':
-                    # 等待调度中心的指令
                     yield self.env.timeout(1)
                 
                 elif self.state == 'serving_passenger':
-                    # 执行载客任务
                     origin = self.task['origin']
                     dest = self.task['destination']
                     
-                    # 1. 前往乘客位置 (空驶)
-                    travel_time = self.config.delta_t # 简化: 假设区域内移动耗时1个时间单位
-                    yield self.env.timeout(travel_time)
+                    dist_to_origin = self.travel_model.get_distance(self.location, origin)
+                    time_to_origin = self.travel_model.get_time(self.location, origin)
+                    yield self.env.timeout(time_to_origin)
                     self.location = origin
-                    self.results.record_idle_dist(1) # 简化: 距离为1
+                    self.results.record_idle_dist(dist_to_origin)
 
-                    # 2. 等待乘客 (可以忽略或设为很小的值)
+                    dist_to_dest = self.travel_model.get_distance(origin, dest)
+                    time_to_dest = self.travel_model.get_time(origin, dest)
+                    yield self.env.timeout(time_to_dest)
                     
-                    # 3. 前往目的地
-                    travel_time = self.config.delta_t * 2 # 简化: 跨区域耗时2个单位
-                    yield self.env.timeout(travel_time)
-                    self.energy -= 1 # 消耗能量
+                    energy_cost = self.travel_model.get_energy_consumption(origin, dest)
+                    self.energy -= energy_cost
                     self.location = dest
-                    self.results.record_service(1)
+                    self.results.record_service(dist_to_dest)
                     
-                    self.state = 'idle' # 完成任务后变为空闲
+                    self.state = 'idle'
                     
                 elif self.state == 'going_to_swap':
-                    # 前往指定的换电站
-                    station_loc = self.target_destination
-                    travel_time = self.config.delta_t
-                    yield self.env.timeout(travel_time)
-                    self.results.record_idle_dist(1)
+                    station_loc = self.target_station.location
+                    
+                    dist_to_station = self.travel_model.get_distance(self.location, station_loc)
+                    time_to_station = self.travel_model.get_time(self.location, station_loc)
+                    yield self.env.timeout(time_to_station)
+                    self.results.record_idle_dist(dist_to_station)
                     self.location = station_loc
                     
-                    # 到达后开始换电
                     self.state = 'swapping'
-                    self.env.process(self.swap_battery())
+                    self.env.process(self.swap_battery(self.target_station))
                     
                 elif self.state == 'swapping':
-                    # 等待换电过程完成
                     yield self.env.timeout(1)
                 else:
                     yield self.env.timeout(1)
 
-            except simpy.Interrupt:
-                # 当调度器分配新任务时，会中断当前等待
+            except simpy.Interrupt as interrupt:
+                # 任务被中断时，直接进入下一次循环处理新状态
                 pass
+            except Exception as e:
+                logging.error(f"出租车 {self.id} 运行时发生错误: {e}", exc_info=True)
+                self.state = 'idle' # 发生错误时，重置为空闲状态以避免卡死
 
-    def swap_battery(self):
-        """换电过程。"""
-        # 找到最近的换电站
-        station = self.find_nearest_station()
-        if station is None:
-            print(f"警告: 出租车 {self.id} 在位置 {self.location} 找不到换电站")
+
+    def swap_battery(self, station):
+        if not station:
+            self.state = 'idle'
             return
-        
+
+        # 调用现在已存在的方法
         self.results.record_swap(station.id)
-        
-        # 请求一个满电电池
         start_wait = self.env.now
+        
+        # 请求一个满电电池，这是一个 SimPy 进程
         yield station.charged_batteries.get(1)
         self.results.record_wait_time(self.env.now - start_wait)
         
-        # 换电耗时
+        # 换电操作耗时
         yield self.env.timeout(self.config.swap_duration)
         
-        # 换电完成，归还空电池 (增加满电池库存)
-        # 简化模型: 假设充电是瞬时的或由另一个过程处理
-        yield station.charged_batteries.put(1)
-        self.energy = self.config.L_energy_levels - 1 # 充满
-        self.state = 'idle'
-
-    def find_nearest_station(self):
-        """找到最近的换电站。"""
-        if not self.stations:
-            return None
+        # 将用完的空电池放回“待充电”库存
+        yield station.empty_batteries.put(1)
         
-        # 创建位置到换电站的映射
-        station_locations = {station.location: station for station in self.stations}
-        
-        # 如果当前位置有换电站，直接返回
-        if self.location in station_locations:
-            return station_locations[self.location]
-        
-        # 否则找到最近的换电站
-        min_distance = float('inf')
-        nearest_station = None
-        
-        for station in self.stations:
-            distance = abs(self.location - station.location)
-            if distance < min_distance:
-                min_distance = distance
-                nearest_station = station
-        
-        return nearest_station
+        self.energy = self.config.L_energy_levels - 1 # 充满电
+        self.state = 'idle' # 切换回空闲状态
+        self.target_station = None
 
     def assign_task(self, task):
         self.task = task
-        self.state = task['type'] # 'serving_passenger' or 'going_to_swap'
-        self.target_destination = task.get('destination')
-        self.action.interrupt() # 中断等待，立即开始新任务
+        self.state = task['type']
+        if self.state == 'going_to_swap':
+            self.target_station = task['station_obj']
+        # 中断当前正在执行的动作（例如，空闲等待）
+        if self.action.is_alive:
+            self.action.interrupt()
 
 class Scheduler:
-    """调度器进程，周期性运行优化并分派任务。"""
     def __init__(self, env, config, optimizer, taxis, stations, results_collector):
         self.env = env
         self.config = config
         self.optimizer = optimizer
         self.taxis = taxis
         self.stations = stations
+        self.station_map = {s.id: s for s in stations}
         self.results = results_collector
         self.action = env.process(self.run())
 
     def run(self):
-        while True:
-            # 每隔一段时间运行一次优化
+        while self.env.now < self.config.simulation_duration:
             yield self.env.timeout(self.config.reoptimization_interval)
             
-            print(f"\n--- 调度器运行于时间 {self.env.now} ---")
+            logging.info(f"--- 调度器运行于时间 {self.env.now:.2f} ---")
             
-            # 1. 获取当前系统状态
             current_state = self._get_current_system_state()
             self.results.record_system_state(self.taxis, self.stations)
 
-            # 2. 调用优化器获取决策
-            # 使用启发式，因为它更快且我们修复了它的bug
+            # 确保传递的时间步是整数
+            current_time_step = int(self.env.now // self.config.delta_t)
+
             decisions = self.optimizer.optimize_single_period(
-                t=int(self.env.now // self.config.delta_t),
+                t=current_time_step,
                 current_state=current_state,
                 use_gurobi=False
             )
-            
-            # 3. 分派任务给出租车
             self._dispatch_tasks(decisions)
     
     def _get_current_system_state(self):
-        """从模拟环境中聚合当前状态。"""
         vacant_taxis = np.zeros((1, self.config.m_areas, self.config.L_energy_levels))
         for taxi in self.taxis:
             if taxi.state == 'idle':
                 loc = taxi.location
-                eng = min(taxi.energy, self.config.L_energy_levels - 1)
-                vacant_taxis[0, loc, eng] += 1
-                
-        bss_inventories = {}
-        for station in self.stations:
-            bss_inventories[station.id] = {
-                'charged': station.charged_batteries.level,
-                'empty': station.capacity - station.charged_batteries.level
-            }
-        
-        return {
-            'vacant_taxis': vacant_taxis,
-            'occupied_taxis': np.zeros_like(vacant_taxis), # 简化: 优化器当前不使用此项
-            'bss_inventories': bss_inventories,
-        }
+                eng = min(int(taxi.energy), self.config.L_energy_levels - 1)
+                if 0 <= loc < self.config.m_areas and 0 <= eng < self.config.L_energy_levels:
+                    vacant_taxis[0, loc, eng] += 1
+        bss_inventories = {s.id: {'charged': s.charged_batteries.level, 'empty': s.empty_batteries.level} for s in self.stations}
+        return {'vacant_taxis': vacant_taxis, 'occupied_taxis': np.zeros_like(vacant_taxis), 'bss_inventories': bss_inventories}
 
     def _dispatch_tasks(self, decisions):
-        """根据优化决策为出租车分配任务。"""
-        # 筛选出所有空闲的出租车
-        idle_taxis = [t for t in self.taxis if t.state == 'idle']
-        random.shuffle(idle_taxis) # 随机化以避免偏差
+        idle_taxi_pool = defaultdict(list)
+        # 只获取真正空闲的出租车
+        true_idle_taxis = [t for t in self.taxis if t.state == 'idle']
         
-        # 分配换电任务
-        swap_dispatch = decisions['swap_dispatch'][0] # t=0
-        for i in range(self.config.m_areas):
-            for j in range(self.config.m_areas):
-                for l in range(self.config.L_energy_levels):
-                    num_to_dispatch = int(swap_dispatch[i, j, l])
-                    for _ in range(num_to_dispatch):
-                        # 找到一辆在区域i，电量为l的空闲出租车
-                        taxi_to_dispatch = next((t for t in idle_taxis if t.location == i and t.energy == l), None)
-                        if taxi_to_dispatch:
-                            task = {'type': 'going_to_swap', 'destination': j}
-                            taxi_to_dispatch.assign_task(task)
-                            idle_taxis.remove(taxi_to_dispatch) # 从空闲列表中移除
+        for taxi in true_idle_taxis:
+            loc = taxi.location
+            eng = min(int(taxi.energy), self.config.L_energy_levels - 1)
+            idle_taxi_pool[(loc, eng)].append(taxi)
 
-        # 分配载客任务
-        passenger_dispatch = decisions['passenger_dispatch'][0] # t=0
-        for i in range(self.config.m_areas):
-            for j in range(self.config.m_areas):
-                 for l in range(self.config.L_energy_levels):
-                    num_to_dispatch = int(passenger_dispatch[i, j, l])
-                    for _ in range(num_to_dispatch):
-                        taxi_to_dispatch = next((t for t in idle_taxis if t.location == i and t.energy == l), None)
-                        if taxi_to_dispatch:
-                            task = {'type': 'serving_passenger', 'origin': i, 'destination': j}
-                            taxi_to_dispatch.assign_task(task)
-                            idle_taxis.remove(taxi_to_dispatch)
+        station_locations = {s.location: s for s in self.stations}
+        swap_dispatch = decisions['swap_dispatch'][0]
+        # 使用 np.argwhere 提高效率
+        for i, j_loc, l in np.argwhere(swap_dispatch > 0):
+            num_to_dispatch = int(swap_dispatch[i, j_loc, l])
+            if j_loc in station_locations:
+                for _ in range(num_to_dispatch):
+                    if not idle_taxi_pool.get((i, l)): break
+                    taxi_to_dispatch = idle_taxi_pool[(i, l)].pop()
+                    station_obj = station_locations[j_loc]
+                    task = {'type': 'going_to_swap', 'station_obj': station_obj}
+                    taxi_to_dispatch.assign_task(task)
 
+        passenger_dispatch = decisions['passenger_dispatch'][0]
+        for i, j, l in np.argwhere(passenger_dispatch > 0):
+            num_to_dispatch = int(passenger_dispatch[i, j, l])
+            for _ in range(num_to_dispatch):
+                if not idle_taxi_pool.get((i, l)): break
+                taxi_to_dispatch = idle_taxi_pool[(i, l)].pop()
+                task = {'type': 'serving_passenger', 'origin': i, 'destination': j}
+                taxi_to_dispatch.assign_task(task)
 
 def run_simulation(config, optimizer):
-    """设置并运行 SimPy 模拟。"""
-    
     env = simpy.Environment()
     results = ResultsCollector(env)
+    stations = [BatterySwapStation(env, id=s_conf['id'], location=s_conf['location'], capacity=s_conf['capacity'], initial_charged=s_conf['initial_charged']) for s_conf in config.stations]
     
-    # 创建换电站
-    stations = []
-    for s_conf in config.stations:
-        station = BatterySwapStation(env, s_conf['id'], s_conf['capacity'], s_conf['initial_charged'])
-        stations.append(station)
+    taxis = [TaxiAgent(env, id=f'taxi_{i}', initial_location=random.randint(0, config.m_areas - 1), initial_energy=random.randint(*config.initial_energy_range), config=config, stations=stations, travel_model=optimizer.travel_model, results_collector=results) for i in range(config.num_taxis)]
         
-    # 创建出租车
-    taxis = []
-    for i in range(config.num_taxis):
-        taxi = TaxiAgent(
-            env=env,
-            id=f'taxi_{i}',
-            initial_location=random.randint(0, config.m_areas - 1),
-            initial_energy=random.randint(config.L_energy_levels // 2, config.L_energy_levels - 1),
-            config=config,
-            stations=stations,
-            results_collector=results
-        )
-        taxis.append(taxi)
-        
-    # 创建调度器
     Scheduler(env, config, optimizer, taxis, stations, results)
     
-    # 运行模拟
     print("--- 模拟开始 ---")
-    env.run(until=config.simulation_duration)
+    try:
+        env.run(until=config.simulation_duration)
+    except Exception as e:
+        logging.error(f"SimPy 环境运行时捕获到异常: {e}", exc_info=True)
     print("--- 模拟结束 ---")
     
-    # 返回最终结果
     final_results = results.get_final_results()
-    # 为可视化添加静态信息
     final_results['stations_config'] = [{'id': s.id, 'location': s.location} for s in stations]
     final_results['taxis_config'] = [{'id': t.id} for t in taxis]
-    
-    # 从历史记录中提取最终的电池状态
-    final_state = results.history[-1] if results.history else {}
-    final_station_states = {s['id']: s['charged_batteries'] for s in final_state.get('stations', [])}
-    final_results['final_station_inventories'] = final_station_states
-
     return final_results
