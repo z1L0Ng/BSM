@@ -4,9 +4,18 @@
 """
 import logging
 import numpy as np
-import gurobipy as gp
-from gurobipy import GRB
 import copy  # 导入copy模块，用于深拷贝
+
+# 尝试导入gurobi，如果不可用则设置为None
+try:
+    import gurobipy as gp
+    from gurobipy import GRB
+    GUROBI_AVAILABLE = True
+except ImportError:
+    gp = None
+    GRB = None
+    GUROBI_AVAILABLE = False
+    print("警告: Gurobi不可用，将使用启发式算法")
 
 class JointOptimizer:
     """
@@ -51,15 +60,17 @@ class JointOptimizer:
         """
         self.logger.info(f"开始为时间段 {t} 进行优化...")
         
-        if use_gurobi:
+        if use_gurobi and GUROBI_AVAILABLE:
             try:
                 # 尝试使用Gurobi进行精确求解
                 solution = self.solve_gurobi(current_state)
-            except gp.GurobiError as e:
-                self.logger.error(f"Gurobi 求解失败，错误代码: {e.errno}。将自动切换到启发式算法。")
+            except Exception as e:
+                self.logger.error(f"Gurobi 求解失败: {e}。将自动切换到启发式算法。")
                 solution = self.solve_heuristic(current_state)
         else:
             # 直接使用启发式算法
+            if use_gurobi and not GUROBI_AVAILABLE:
+                self.logger.warning("Gurobi不可用，使用启发式算法代替")
             solution = self.solve_heuristic(current_state)
             
         # 在返回决策前，验证其有效性

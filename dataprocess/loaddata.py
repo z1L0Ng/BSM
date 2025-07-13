@@ -54,6 +54,15 @@ def clean_trip_data(df):
     print("开始数据清洗...")
     original_size = len(df)
     
+    # 创建副本并重置索引，避免重复标签问题
+    df = df.copy()
+    df = df.reset_index(drop=True)
+    
+    # 处理重复列名
+    if df.columns.duplicated().any():
+        print("发现重复列名，正在处理...")
+        df = df.loc[:, ~df.columns.duplicated()]
+    
     # 标准化列名（处理不同数据源的列名差异）
     column_mapping = {
         'tpep_pickup_datetime': 'pickup_datetime',
@@ -96,7 +105,9 @@ def clean_trip_data(df):
         print(f"时间转换警告: {e}")
 
     # 只保留早上6点到午夜的行程
-    df = df[df['pickup_datetime'].dt.hour >= 6]
+    df['hour'] = df['pickup_datetime'].dt.hour
+    df = df.query('hour >= 6')
+    df = df.reset_index(drop=True)
     print(f"筛选6am-12am的行程后剩余: {len(df)} 行")
     
     # 数据清洗步骤
@@ -134,12 +145,16 @@ def clean_trip_data(df):
     
     # 3. 处理行程距离和费用
     if 'trip_distance' in df.columns:
-        df = df[df['trip_distance'] > 0]  # 删除距离为0的行程
-        df = df[df['trip_distance'] <= 100]  # 删除异常长距离行程
+        df = df.query('trip_distance > 0')  # 删除距离为0的行程
+        df = df.reset_index(drop=True)
+        df = df.query('trip_distance <= 100')  # 删除异常长距离行程
+        df = df.reset_index(drop=True)
     
     if 'fare_amount' in df.columns:
-        df = df[df['fare_amount'] > 0]  # 删除费用为0的行程
-        df = df[df['fare_amount'] <= 1000]  # 删除异常高费用行程
+        df = df.query('fare_amount > 0')  # 删除费用为0的行程
+        df = df.reset_index(drop=True)
+        df = df.query('fare_amount <= 1000')  # 删除异常高费用行程
+        df = df.reset_index(drop=True)
     
     # 4. 处理乘客数量
     if 'passenger_count' in df.columns:

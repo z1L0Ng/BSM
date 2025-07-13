@@ -33,7 +33,8 @@ def _generate_visualizations(results: dict, output_dir: str):
         
         # 计算每个站点的电池状态
         # 注意：这里需要从 config 中获取站点的总容量
-        station_capacities = {s['id']: s['capacity'] for s in SimulationConfig.stations}
+        config = SimulationConfig()
+        station_capacities = {s['id']: s['capacity'] for s in config.stations}
         charged_batteries = {sid: final_inventories.get(sid, 0) for sid in station_ids}
         empty_batteries = {sid: station_capacities.get(sid, 0) - charged_batteries.get(sid, 0) for sid in station_ids}
         
@@ -80,7 +81,7 @@ def main():
     """主执行函数。"""
     # 1. 加载配置
     config = SimulationConfig()
-    output_dir = "simulation_results"
+    output_dir = "output"
 
     # 2. 初始化模型
     demand_model = ODMatrixDemandModel(config.m_areas, config.T_periods)

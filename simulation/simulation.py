@@ -132,7 +132,12 @@ class TaxiAgent:
 
     def swap_battery(self):
         """换电过程。"""
-        station = self.stations[self.location]
+        # 找到最近的换电站
+        station = self.find_nearest_station()
+        if station is None:
+            print(f"警告: 出租车 {self.id} 在位置 {self.location} 找不到换电站")
+            return
+        
         self.results.record_swap(station.id)
         
         # 请求一个满电电池
@@ -148,6 +153,30 @@ class TaxiAgent:
         yield station.charged_batteries.put(1)
         self.energy = self.config.L_energy_levels - 1 # 充满
         self.state = 'idle'
+
+    def find_nearest_station(self):
+        """找到最近的换电站。"""
+        if not self.stations:
+            return None
+        
+        # 创建位置到换电站的映射
+        station_locations = {station.location: station for station in self.stations}
+        
+        # 如果当前位置有换电站，直接返回
+        if self.location in station_locations:
+            return station_locations[self.location]
+        
+        # 否则找到最近的换电站
+        min_distance = float('inf')
+        nearest_station = None
+        
+        for station in self.stations:
+            distance = abs(self.location - station.location)
+            if distance < min_distance:
+                min_distance = distance
+                nearest_station = station
+        
+        return nearest_station
 
     def assign_task(self, task):
         self.task = task

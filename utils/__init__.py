@@ -2,9 +2,8 @@
 
 from .visualization import (
     plot_station_metrics,
-    plot_taxi_metrics, 
-    create_nyc_map,
-    create_animation
+    plot_taxi_metrics,
+    plot_performance_metrics
 )
 
 from .analysis import (
@@ -17,8 +16,7 @@ from .analysis import (
 __all__ = [
     'plot_station_metrics',
     'plot_taxi_metrics',
-    'create_nyc_map', 
-    'create_animation',
+    'plot_performance_metrics',
     'analyze_performance',
     'plot_optimization_results',
     'compare_scenarios',
