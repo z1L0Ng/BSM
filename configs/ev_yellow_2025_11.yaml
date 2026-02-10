@@ -1,0 +1,60 @@
+project:
+  name: bsm-ev
+  timezone: America/New_York
+
+paths:
+  raw_dir: data/raw
+  processed_dir: data/processed
+  interim_dir: data/interim
+  reports_dir: reports
+
+# Data source with fallback years
+# If 2025-11 is unavailable, script will try 2024-11 then 2023-11
+
+dataset:
+  name: yellow
+  year: 2025
+  month: 11
+  fallback_years: [2024, 2023]
+  url_template: "https://d37ci6vzurychx.cloudfront.net/trip-data/yellow_tripdata_{year}-{month:02d}.parquet"
+  filename_template: "yellow_tripdata_{year}-{month:02d}.parquet"
+  columns:
+    - tpep_pickup_datetime
+    - tpep_dropoff_datetime
+    - PULocationID
+    - DOLocationID
+    - trip_distance
+
+zone_lookup:
+  url: "https://d37ci6vzurychx.cloudfront.net/misc/taxi_zone_lookup.csv"
+  filename: "taxi_zone_lookup.csv"
+
+processing:
+  time_bin_minutes: 15
+  top_k_zones: 15
+  max_time_bins: null
+  optimize_by_day: true
+  start_date: null
+  end_date: null
+  max_days: null
+
+simulation:
+  n_vehicles: 20000
+
+optimization:
+  idle_distance_weight: 0.02
+  time_limit_sec: 600
+
+stations:
+  zones: []
+  capacity_per_slot: 300
+  max_power_kw: 8000
+  deadline_slots: 8
+  initial_full_batteries: 500
+  monitor_zone_id: null
+
+ev:
+  battery_kwh: 75
+  kwh_per_mile: 0.3
+  soc_threshold: 0.2
+  soc_levels: 6
