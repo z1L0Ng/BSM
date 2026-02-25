@@ -1,6 +1,6 @@
 # E-Taxi 换电站协同系统技术规格说明书（完整版）
 
-> **版本说明**：本文档基于原始技术规格说明书，补充了论文中的关键技术细节，包括状态转移概率模型、充电抢占机制、完整约束条件等内容。
+> **版本说明**：本文档已与 `docs/E_taxi_Battery_Swapping_Stations.pdf`（创建时间：2026-02-25）对齐，补充并校正了状态转移、换电/充电约束、调度模型以及相关工作与参考文献。
 
 ---
 
@@ -159,7 +159,10 @@ $$
 \mu_{i,l}^t \leq B_{i,l}^t
 $$
 $$
-\sum_{l} \mu_{i,l}^t \leq \min(M_i^{t,L}, p_i)
+\sum_{l} \mu_{i,l}^t \leq M_i^{t,L}
+$$
+$$
+\sum_{l} \mu_{i,l}^t \leq p_i
 $$
 
 #### 3.2.2 换电后的车辆状态
@@ -211,10 +214,20 @@ $$
 
 #### 3.3.3 决策变量
 
-$x_i^t \in \{0, 1\}$：任务 $\tau_i$ 是否在时刻 $t$ 进行充电
+论文中将每个任务的充电计划写为向量：
+$$
+x_i \in \{0, 1\}^{1 \times T}
+$$
+
+其中标量 $x_i^t$ 表示任务 $\tau_i$ 在时刻 $t'+t$ 是否充电：
 
 - $x_i^t = 1$：在时刻 $t' + t$ 充电
 - $x_i^t = 0$：在时刻 $t' + t$ 不充电
+
+时间索引满足：
+$$
+t' \le A_i, C_i, D_i \le t' + T - 1
+$$
 
 #### 3.3.4 充电特性（❗新增内容）
 
@@ -278,6 +291,10 @@ $$
 $$
 \sum_l y_i^{t,l} \leq q_i
 $$
+
+**控制边界说明（与论文一致）**：
+- 车队运营方不直接决定站内细粒度充电序列，$y_i^{t,l}$ 用于刻画站内充电执行结果
+- 充电调度器在满足 Eq. (5)(6)(12)(14) 前提下，优化峰值功率目标
 
 **注意**：
 - 当 $l = L$ 时，$y_i^{t,L} = 0$（满电电池无需充电）
@@ -418,6 +435,11 @@ $$
 \min \max_{t \in [t', t'+T-1]} \left( P \cdot \sum_{\tau_i \in \Psi} x_i^t + D_j \right)
 $$
 
+并满足充电完成约束（论文 Eq. (14)）：
+$$
+\sum_{t=A_i}^{D_i-1} x_i^t = C_i
+$$
+
 其中：
 - $P$：单个电池的充电功率（kW）
 - $x_i^t$：任务 $\tau_i$ 在时刻 $t$ 是否充电（0或1）
@@ -432,6 +454,11 @@ $$
 - **削峰填谷**：避免多个电池同时充电造成的峰值
 - **减少电费**：许多地区采用峰值电价（demand charge）
 - **电网稳定**：降低对配电网的冲击
+
+**符号统一说明**：
+- 论文 III.B 中充电器数量使用 $q_i$
+- 论文 IV 中个别位置写作 $p_j$（上下文含义仍是“站点充电器数量”）
+- 本说明书统一记作 $q_j$，避免与换电服务容量 $p_i$ 混淆
 
 ---
 
@@ -466,6 +493,7 @@ Eq. (4): μ_{i,l}^t ≤ B_{i,l}^t
 
 ```
 Eq. (12): Σ_{t=A_i}^{D_i-1} x_i^t = C_i
+Eq. (14): Σ_{t=A_i}^{D_i-1} x_i^t = C_i
 
 Eq. (5):  y_i^{t,l} ≤ Mˆ_i^{t,l}
           Σ_l y_i^{t,l} ≤ q_i
@@ -1084,42 +1112,52 @@ def validate_state_invariants(fleet_state, stations):
 
 ## 10. 补充说明
 
-### 10.1 与原技术文档的主要增强
+### 10.1 与 2026-02-25 版论文的对齐更新
 
-| 项目 | 原文档 | 本版本 |
-|------|--------|--------|
-| 状态转移模型 | 简略提及 | 完整公式 + 概率参数定义 |
-| 充电特性 | 未说明 | 明确可抢占/可迁移性质 |
-| 基础负荷 | 缺失 | 补充 $D_j$ 定义 |
-| 电池库存更新 | 不完整 | 完整 Eq. (6) 推导 |
-| 算法流程 | 概念性 | 可执行伪代码 |
-| 数据结构 | 基础JSON | 完整Schema + 数据流图 |
-| 实现细节 | 无 | 求解器建议 + 调试方法 |
+| 对齐项 | 调整内容 |
+|------|--------|
+| 换电约束 Eq. (4) | 改为三条独立不等式，显式对应到达车辆、满电库存、换电服务容量 |
+| 充电计划变量 | 补充向量形式 $x_i \in \{0,1\}^{1\times T}$ 与索引范围 $t' \le A_i,C_i,D_i \le t'+T-1$ |
+| 充电控制边界 | 明确 $y_i^{t,l}$ 用于描述站内执行结果，车队侧不直接下发站内细粒度充电序列 |
+| 充电目标约束 | 在峰值目标下补充 Eq. (14) 完成约束 |
+| 符号一致性 | 统一“充电器数量”符号为 $q_j$，避免与换电容量 $p_i$ 混淆 |
 
-### 10.2 未来扩展方向
+### 10.2 论文相关工作摘要（新增）
 
-1. **不确定性建模**：
-   - 乘客需求的随机性
-   - 电池老化对充电时间的影响
-   - 突发事件（交通拥堵、设备故障）
+论文将相关研究分为三类：
 
-2. **多目标优化**：
-   - 服务质量 vs 运营成本 vs 电网友好
-   - 帕累托前沿分析
+1. **电动出租车换电调度**：关注车队调度、换电排队与运营成本平衡，强调“调度-换电”联合优化优于解耦策略。  
+2. **换电站运行模型**：关注库存动态、服务能力与排队特性，常将车辆到达视为外生输入。  
+3. **充电站调度与电网协同**：关注削峰填谷、截止时间约束与分布式负荷控制，但通常不显式建模换电库存与车队重定位。  
 
-3. **分布式架构**：
-   - 各换电站独立决策 + 协同机制
-   - 联邦学习框架
+### 10.3 参考文献（与论文一致）
 
-### 10.3 与论文对应关系
+[1] P. You, S. H. Low, W. Tushar, G. Geng, C. Yuen, Y. Sun, and Z. Yang, "Scheduling of EV Battery Swapping, I: Centralized Solution," arXiv, 2016.  
+[2] F. Ahmad, M. S. Alam, I. S. Alsaidan, and S. M. Shariff, "Battery Swapping Station for Electric Vehicles: Opportunities and Challenges," IET Smart Grid, 2020.  
+[3] P. You, S. H. Low, L. Zhang, R. Deng, G. B. Giannakis, Y. Sun, and Z. Yang, "Scheduling of EV Battery Swapping, II: Distributed Solutions," arXiv, 2016.  
+[4] H. Qiang, Y. Hu, W. Tang, and X. Zhang, "Research on Optimization Strategy of Battery Swapping for Electric Taxis," Energies, 2023.  
+[5] Z. Lai and S. Li, "Towards a Multimodal Charging Network: Joint Planning of Charging Stations and Battery Swapping Stations for Electrified Ride-Hailing Fleets," arXiv, 2022.  
+[6] Z. Liu, X. Ma, X. Liu, G. H. d. A. Correia, R. Shi, and W. Shang, "Optimizing Electric Taxi Battery Swapping Stations Featuring Modular Battery Swapping: A Data-Driven Approach," Applied Sciences, 2023.  
+[7] Z. Zhao, D. Tian, X. Duan, and R. Xiao, "Joint Optimization of Battery Swapping Scheduling for Electric Taxis," Sustainability, 2023.  
+[8] Y. Feng, X. Lu, X. Huang, and J. Ma, "Real-Time Electric Taxi Guidance for Battery Swapping Stations under Dynamic Demand," Energies, 2025.  
+[9] S. Zhang, X. Li, Y. Li, and J. Xue, "A Bi-Objective Battery Dispatching Model of Taxi Battery Swapping Station Network Considering Green Power Consumption," Renewable Energy, 2025.  
+[10] S. Yang, J. Yao, T. Kang, and X. Zhu, "Dynamic Operation Model of the Battery Swapping Station for EV in Electricity Market," Energy, 2014.  
+[11] G. Hua, Y. Liu, and Y. Xu, "Inventory Policy for Electric Vehicle Battery Swapping Stations in Beijing," Journal of System and Management Sciences, 2023.  
+[12] N. Krivulin and A. Garg, "Tropical Modeling of Battery Swapping and Charging Station," Mathematics, 2024.  
+[13] D. Renga and M. Meo, "Modeling Battery Swapping Stations for Sustainable Urban Mobility," Sustainable Energy, Grids and Networks, 2025.  
+[14] Z. Ma, D. S. Callaway, and I. A. Hiskens, "Decentralized Charging Control of Large Populations of Plug-In Electric Vehicles," IEEE TCST, 2013.  
+[15] L. Gan, U. Topcu, and S. H. Low, "Optimal Decentralized Protocol for Electric Vehicle Charging," IEEE TPS, 2013.
+
+### 10.4 与论文对应关系
 
 | 本文档章节 | 论文章节 |
 |-----------|---------|
-| 2. 系统实体定义 | II. System Design & III.A |
-| 3. 核心决策变量 | III.B, III.C |
+| 2. 系统实体定义 | II. System Design, III.A |
+| 3. 核心决策变量与约束 | III.A, III.B, III.C |
 | 4. 状态转移模型 | III.A (Eq. 2, 3) |
-| 5. 优化目标 | III.C, IV |
-| 7. 算法流程 | (论文未涵盖) |
+| 5. 优化目标 | III.C, IV (Eq. 13, 14) |
+| 10.2/10.3 相关工作与文献 | VI. Related Work, References |
+| 7. 算法流程（工程化补充） | 论文未展开（实现扩展） |
 
 ---
 
