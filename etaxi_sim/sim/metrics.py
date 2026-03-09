@@ -25,6 +25,7 @@ class MetricsRecorder:
         stations: List[Station],
         charged_by_station: Dict[int, int] | None = None,
         deadline_misses: int = 0,
+        charging_deadline_misses: int = 0,
         charge_power_kw: float = 0.0,
         swap_arrivals: int = 0,
         swap_requests: int = 0,
@@ -51,6 +52,10 @@ class MetricsRecorder:
         ratio_den = swap_requests if swap_requests > 0 else swap_arrivals
         swap_success_ratio = float(successful_swaps / ratio_den) if ratio_den > 0 else 0.0
         deadline_miss_ratio = float(deadline_misses / ratio_den) if ratio_den > 0 else 0.0
+        charge_ratio_den = successful_swaps if successful_swaps > 0 else ratio_den
+        charging_deadline_miss_ratio = (
+            float(charging_deadline_misses / charge_ratio_den) if charge_ratio_den > 0 else 0.0
+        )
 
         self.steps.append(
             {
@@ -70,6 +75,8 @@ class MetricsRecorder:
                 "waiting_vehicles": int(waiting_vehicles),
                 "deadline_misses": int(deadline_misses),
                 "deadline_miss_ratio": deadline_miss_ratio,
+                "charging_deadline_misses": int(charging_deadline_misses),
+                "charging_deadline_miss_ratio": charging_deadline_miss_ratio,
                 "waiting_time_for_battery_slots": float(waiting_time_for_battery_slots),
                 "charging_demand": int(charging_demand),
                 "total_charging_demand_kw": float(total_charging_demand_kw),
@@ -89,6 +96,7 @@ class MetricsRecorder:
         served = sum(s["served"] for s in self.steps)
         idle_moves = sum(s["idle_moves"] for s in self.steps)
         deadline_misses = sum(s["deadline_misses"] for s in self.steps)
+        charging_deadline_misses = sum(s.get("charging_deadline_misses", 0) for s in self.steps)
         swap_arrivals = sum(s["swap_arrivals"] for s in self.steps)
         swap_requests = sum(s["swap_requests"] for s in self.steps)
         successful_swaps = sum(s["number_of_swaps"] for s in self.steps)
@@ -110,6 +118,9 @@ class MetricsRecorder:
         ratio_den = swap_requests if swap_requests > 0 else swap_arrivals
         battery_swap_success_ratio = float(successful_swaps / ratio_den) if ratio_den > 0 else 0.0
         deadline_miss_ratio = float(deadline_misses / ratio_den) if ratio_den > 0 else 0.0
+        charging_deadline_miss_ratio = (
+            float(charging_deadline_misses / successful_swaps) if successful_swaps > 0 else 0.0
+        )
         avg_waiting_time_for_battery_slots = (
             float(waiting_time_for_battery_slots / ratio_den) if ratio_den > 0 else 0.0
         )
@@ -142,6 +153,8 @@ class MetricsRecorder:
             "total_waiting_vehicles": waiting_vehicles,
             "total_deadline_misses": deadline_misses,
             "deadline_miss_ratio": deadline_miss_ratio,
+            "total_charging_deadline_misses": charging_deadline_misses,
+            "charging_deadline_miss_ratio": charging_deadline_miss_ratio,
             "total_charging_demand": charging_demand,
             "max_total_charging_demand_kw": max_total_charging_demand_kw,
             "max_charging_power_demand_kw": max_total_charging_demand_kw,

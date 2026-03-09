@@ -41,6 +41,7 @@ def save_episode_logs(
     summary: dict,
     output_root: Path,
     config_path: str,
+    config_snapshot: dict | None = None,
 ) -> Path:
     run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = output_root / run_id
@@ -54,13 +55,18 @@ def save_episode_logs(
         "served",
         "idle_moves",
         "swap_arrivals",
+        "swap_requests",
         "swap_success_ratio",
         "deadline_misses",
         "deadline_miss_ratio",
+        "charging_deadline_misses",
+        "charging_deadline_miss_ratio",
         "charging_power_kw",
         "total_charging_demand_kw",
+        "station_total_power_kw",
         "peak_station_power_kw",
         "waiting_time_for_battery_slots",
+        "waiting_vehicles",
         "idle_driving_distance",
         "vacant",
         "occupied",
@@ -79,9 +85,11 @@ def save_episode_logs(
             writer.writerow(step)
 
     summary_payload = {
+        "schema_version": "v2",
         "run_id": run_id,
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "config": config_path,
+        "config_snapshot": config_snapshot or {},
         "summary": summary,
     }
     with (output_dir / "summary.json").open("w", encoding="utf-8") as f:
@@ -225,11 +233,27 @@ def main() -> None:
         summary["initial_vehicles"] = int(initial_vehicles)
 
     if args.save_episode_log:
+        snapshot = {
+            "time_bin_minutes": cfg.sim.time_bin_minutes,
+            "horizon": cfg.sim.horizon,
+            "sim_date": cfg.sim.sim_date,
+            "battery_levels": cfg.sim.battery_levels,
+            "charge_rate_levels_per_slot": cfg.sim.charge_rate_levels_per_slot,
+            "swap_deadline_horizon": cfg.sim.swap_deadline_horizon,
+            "swap_low_energy_threshold": cfg.sim.swap_low_energy_threshold,
+            "base_load_kw": cfg.sim.base_load_kw,
+            "charge_power_kw": cfg.sim.charge_power_kw,
+            "reposition_solver": cfg.model.reposition_solver,
+            "charging_solver": cfg.model.charging_solver,
+            "station_swapping_capacity": cfg.station.swapping_capacity,
+            "station_chargers": cfg.station.chargers,
+        }
         output_dir = save_episode_logs(
             metrics=metrics,
             summary=summary,
             output_root=Path(args.episode_log_dir),
             config_path=str(args.config),
+            config_snapshot=snapshot,
         )
         summary["episode_log_dir"] = str(output_dir)
 

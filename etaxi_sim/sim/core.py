@@ -176,6 +176,7 @@ class Simulation:
         waiting_by_station = self.waiting_queue[:, : self.levels].sum(axis=1)
         waiting_vehicles = int(self.waiting_queue[:, : self.levels].sum())
         unmet_battery_demand = waiting_vehicles
+        swap_deadline_misses = max(0, int(swap_requests - successful_swaps))
 
         # 5) Charging schedule
         charging_demand = sum(
@@ -214,8 +215,8 @@ class Simulation:
             station.apply_charging(station_tasks, self.charge_rate_levels_per_slot)
             charged_by_station[station.station_id] = len(station_tasks)
 
-        # Remove completed or expired tasks, and track deadline misses.
-        deadline_misses = sum(
+        # Remove completed or expired tasks, and track charging deadline misses.
+        charging_deadline_misses = sum(
             1 for task in self.charging_tasks if (t + 1 >= task.deadline and not task.is_completed())
         )
         self.charging_tasks = [
@@ -249,7 +250,8 @@ class Simulation:
             fleet=self.fleet,
             stations=self.stations,
             charged_by_station=charged_by_station,
-            deadline_misses=deadline_misses,
+            deadline_misses=swap_deadline_misses,
+            charging_deadline_misses=charging_deadline_misses,
             charge_power_kw=self.charge_power_kw,
             swap_arrivals=swap_arrivals,
             swap_requests=swap_requests,

@@ -15,7 +15,7 @@ sim:
   sim_date: "2025-11-01"
   battery_levels: 100
   charge_rate_levels_per_slot: 5
-  swap_deadline_horizon: 8
+  swap_deadline_horizon: 20
   swap_low_energy_threshold: 20
   min_full_batteries_per_station: 20
   initial_vehicles: 1000
