@@ -12,12 +12,14 @@ from etaxi_sim.models.station import Station
 from etaxi_sim.policies.charging import (
     ChargingPolicyConfig,
     edf_charging_policy,
+    fcfs_nonpreemptive_charging_policy,
     gurobi_peak_charging_policy,
 )
 from etaxi_sim.policies.reposition import (
     RepositionPolicyConfig,
     greedy_same_zone_policy,
     gurobi_reposition_policy,
+    heuristic_battery_aware_policy,
 )
 from etaxi_sim.sim.metrics import MetricsRecorder
 
@@ -48,6 +50,8 @@ class Simulation:
     metrics: MetricsRecorder
 
     charging_tasks: List[ChargingTask]
+    waiting_queue: np.ndarray
+    active_charging_task_ids_by_station: dict[int, list[int]]
     task_counter: int
     rng: np.random.Generator
 
@@ -81,6 +85,26 @@ class Simulation:
                 t_start=t,
                 config=reposition_cfg,
             )
+        elif self.reposition_solver == "heuristic":
+            X, Y = heuristic_battery_aware_policy(
+                fleet=self.fleet,
+                demand=demand_window[0],
+                station_full_batteries=np.array([s.full_batteries for s in self.stations], dtype=int),
+                config=reposition_cfg,
+            )
+        elif self.reposition_solver == "ideal":
+            ideal_cap = int(max(1, self.fleet.vacant.sum()))
+            X, Y = gurobi_reposition_policy(
+                fleet=self.fleet,
+                demand_window=demand_window,
+                reachability=self.reachability,
+                energy_consumption=self.energy_consumption,
+                station_full_batteries=np.full(len(self.stations), ideal_cap, dtype=int),
+                station_swapping_capacity=np.full(len(self.stations), ideal_cap, dtype=int),
+                transition=self.transition,
+                t_start=t,
+                config=reposition_cfg,
+            )
         else:
             X, Y = greedy_same_zone_policy(self.fleet, demand_window[0], reposition_cfg)
         # Enforce reachability: nu[i,i'] = 1 means unreachable within one slot
@@ -93,6 +117,8 @@ class Simulation:
         enough_energy = levels >= self.energy_consumption[:, :, None]
         X = (X * enough_energy).astype(int, copy=False)
         Y = (Y * enough_energy).astype(int, copy=False)
+        move_counts = (X + Y).sum(axis=2)
+        idle_driving_distance = float(np.sum(move_counts * self.energy_consumption))
 
         dispatched = X.sum(axis=1) + Y.sum(axis=1)
         residual_vacant = self.fleet.vacant - dispatched
@@ -103,12 +129,39 @@ class Simulation:
         B = Y.sum(axis=0)  # (m, L+1)
         S = X.sum(axis=0)  # (m, L+1)
         U = self.fleet.occupied.copy()
+        swap_arrivals = int(B[:, : self.levels].sum())
 
         # 3) Swapping at stations
         H = np.zeros_like(B)
+        next_waiting_queue = np.zeros_like(self.waiting_queue)
+        successful_swaps = 0
+        swap_requests = 0
+        waiting_time_for_battery_slots = 0.0
+        ideal_swap_assumption = self.reposition_solver == "ideal"
         for i, station in enumerate(self.stations):
-            swapped, vehicles_after = station.perform_swapping(B[i])
-            H[i] = vehicles_after
+            station_requests = self.waiting_queue[i].copy()
+            station_requests[: self.levels] += B[i, : self.levels]
+            station_requests[self.levels] = 0
+
+            if ideal_swap_assumption:
+                swapped = station_requests.copy()
+                swapped[self.levels] = 0
+                not_swapped = np.zeros_like(station_requests)
+                for l in range(self.levels):
+                    if swapped[l] > 0:
+                        station.pending_charge[l] += int(swapped[l])
+                        station.partial_batteries[l] += int(swapped[l])
+            else:
+                swapped, not_swapped = station.perform_swapping(station_requests)
+            station_swapped = int(swapped[: self.levels].sum())
+            successful_swaps += station_swapped
+            swap_requests += int(station_requests[: self.levels].sum())
+
+            next_waiting_queue[i, : self.levels] = not_swapped[: self.levels]
+            waiting_time_for_battery_slots += float(next_waiting_queue[i, : self.levels].sum())
+
+            # Swapped vehicles plus direct full-battery arrivals re-enter fleet as full.
+            H[i, self.levels] = int(station_swapped + B[i, self.levels])
             # 4) Generate charging tasks
             new_tasks = station.generate_charging_tasks(
                 swapped=swapped,
@@ -119,8 +172,17 @@ class Simulation:
             )
             self.task_counter += len(new_tasks)
             self.charging_tasks.extend(new_tasks)
+        self.waiting_queue = next_waiting_queue
+        waiting_by_station = self.waiting_queue[:, : self.levels].sum(axis=1)
+        waiting_vehicles = int(self.waiting_queue[:, : self.levels].sum())
+        unmet_battery_demand = waiting_vehicles
 
         # 5) Charging schedule
+        charging_demand = sum(
+            1 for task in self.charging_tasks if (not task.is_completed()) and task.is_available(t)
+        )
+        total_charging_demand_kw = float(self.charge_power_kw * charging_demand)
+
         chargers_by_station = {s.station_id: s.chargers for s in self.stations}
         if self.charging_solver == "gurobi":
             charging_cfg = ChargingPolicyConfig(
@@ -136,8 +198,16 @@ class Simulation:
                 current_time=t,
                 config=charging_cfg,
             )
+        elif self.charging_solver == "fcfs":
+            charged, self.active_charging_task_ids_by_station = fcfs_nonpreemptive_charging_policy(
+                tasks=self.charging_tasks,
+                chargers_by_station=chargers_by_station,
+                current_time=t,
+                active_task_ids_by_station=self.active_charging_task_ids_by_station,
+            )
         else:
             charged = edf_charging_policy(self.charging_tasks, chargers_by_station, current_time=t)
+            self.active_charging_task_ids_by_station = {}
         charged_by_station = {station.station_id: 0 for station in self.stations}
         for station in self.stations:
             station_tasks = [task for task in charged if task.station_id == station.station_id]
@@ -151,6 +221,11 @@ class Simulation:
         self.charging_tasks = [
             task for task in self.charging_tasks if not task.is_completed() and (t + 1 < task.deadline)
         ]
+        active_task_ids = {task.task_id for task in self.charging_tasks}
+        self.active_charging_task_ids_by_station = {
+            sid: [tid for tid in task_ids if tid in active_task_ids]
+            for sid, task_ids in self.active_charging_task_ids_by_station.items()
+        }
 
         # 6) State transition
         self.fleet = _state_transition(
@@ -176,6 +251,16 @@ class Simulation:
             charged_by_station=charged_by_station,
             deadline_misses=deadline_misses,
             charge_power_kw=self.charge_power_kw,
+            swap_arrivals=swap_arrivals,
+            swap_requests=swap_requests,
+            successful_swaps=successful_swaps,
+            unmet_battery_demand=unmet_battery_demand,
+            charging_demand=charging_demand,
+            total_charging_demand_kw=total_charging_demand_kw,
+            waiting_time_for_battery_slots=waiting_time_for_battery_slots,
+            idle_driving_distance=idle_driving_distance,
+            waiting_vehicles=waiting_vehicles,
+            waiting_vehicles_by_station=waiting_by_station,
         )
 
 

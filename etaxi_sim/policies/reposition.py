@@ -81,6 +81,53 @@ def greedy_same_zone_policy(
     return X, Y
 
 
+def heuristic_battery_aware_policy(
+    fleet: FleetState,
+    demand: np.ndarray,
+    station_full_batteries: np.ndarray,
+    config: RepositionPolicyConfig,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Heuristic baseline:
+    - Low-energy vehicles only go to swap when local full-battery stock is available.
+    - Remaining low-energy vehicles are delayed (kept idle in-zone).
+    - Service is assigned in-zone using higher-energy vehicles first.
+    """
+    m, levels_plus = fleet.vacant.shape
+    X = np.zeros((m, m, levels_plus), dtype=int)
+    Y = np.zeros((m, m, levels_plus), dtype=int)
+
+    for i in range(m):
+        available = fleet.vacant[i].copy()
+        full_budget = max(0, int(station_full_batteries[i]))
+
+        for l in range(levels_plus):
+            if l > config.swap_low_energy_threshold:
+                continue
+            count = int(available[l])
+            if count <= 0:
+                continue
+            send_to_swap = min(count, full_budget)
+            if send_to_swap > 0:
+                Y[i, i, l] = send_to_swap
+                available[l] -= send_to_swap
+                full_budget -= send_to_swap
+
+        remaining_demand = int(demand[i])
+        for l in range(levels_plus - 1, config.swap_low_energy_threshold, -1):
+            if remaining_demand <= 0:
+                break
+            count = int(available[l])
+            if count <= 0:
+                continue
+            assign = min(count, remaining_demand)
+            X[i, i, l] = assign
+            available[l] -= assign
+            remaining_demand -= assign
+
+    return X, Y
+
+
 def _topk_dests(row: np.ndarray, k: int) -> np.ndarray:
     if row.size <= k:
         idx = np.arange(row.size)

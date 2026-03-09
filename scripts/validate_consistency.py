@@ -32,12 +32,14 @@ from etaxi_sim.models.station import Station
 from etaxi_sim.policies.charging import (
     ChargingPolicyConfig,
     edf_charging_policy,
+    fcfs_nonpreemptive_charging_policy,
     gurobi_peak_charging_policy,
 )
 from etaxi_sim.policies.reposition import (
     RepositionPolicyConfig,
     greedy_same_zone_policy,
     gurobi_reposition_policy,
+    heuristic_battery_aware_policy,
 )
 from etaxi_sim.sim.core import Simulation
 from etaxi_sim.sim.metrics import MetricsRecorder
@@ -150,6 +152,8 @@ def main() -> None:
         solver_time_limit_sec=cfg.model.solver_time_limit_sec,
         metrics=metrics,
         charging_tasks=[],
+        waiting_queue=np.zeros((m, cfg.sim.battery_levels + 1), dtype=int),
+        active_charging_task_ids_by_station={},
         task_counter=0,
         rng=np.random.default_rng(cfg.sim.seed),
     )
@@ -199,6 +203,26 @@ def main() -> None:
                 t_start=t,
                 config=rep_cfg,
             )
+        elif cfg.model.reposition_solver == "heuristic":
+            X, Y = heuristic_battery_aware_policy(
+                fleet=sim.fleet,
+                demand=demand_window[0],
+                station_full_batteries=np.array([s.full_batteries for s in sim.stations], dtype=int),
+                config=rep_cfg,
+            )
+        elif cfg.model.reposition_solver == "ideal":
+            ideal_cap = int(max(1, sim.fleet.vacant.sum()))
+            X, Y = gurobi_reposition_policy(
+                fleet=sim.fleet,
+                demand_window=demand_window,
+                reachability=reachability,
+                energy_consumption=energy_consumption,
+                station_full_batteries=np.full(len(sim.stations), ideal_cap, dtype=int),
+                station_swapping_capacity=np.full(len(sim.stations), ideal_cap, dtype=int),
+                transition=transition,
+                t_start=t,
+                config=rep_cfg,
+            )
         else:
             X, Y = greedy_same_zone_policy(sim.fleet, demand_window[0], rep_cfg)
 
@@ -237,6 +261,13 @@ def main() -> None:
                 current_time=t,
                 config=charge_cfg,
             )
+        elif cfg.model.charging_solver == "fcfs":
+            charged, _ = fcfs_nonpreemptive_charging_policy(
+                tasks=sim.charging_tasks,
+                chargers_by_station=chargers_by_station,
+                current_time=t,
+                active_task_ids_by_station=sim.active_charging_task_ids_by_station,
+            )
         else:
             charged = edf_charging_policy(sim.charging_tasks, chargers_by_station, current_time=t)
         for sid, cap in chargers_by_station.items():
@@ -250,7 +281,7 @@ def main() -> None:
 
         sim.step(t, demand_t, cfg.sim.swap_low_energy_threshold)
 
-        total_vehicles = int(sim.fleet.vacant.sum() + sim.fleet.occupied.sum())
+        total_vehicles = int(sim.fleet.vacant.sum() + sim.fleet.occupied.sum() + sim.waiting_queue.sum())
         vehicle_min = min(vehicle_min, total_vehicles)
         vehicle_max = max(vehicle_max, total_vehicles)
 

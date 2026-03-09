@@ -56,6 +56,54 @@ def edf_charging_policy(
     return charged
 
 
+def fcfs_nonpreemptive_charging_policy(
+    tasks: List[ChargingTask],
+    chargers_by_station: Dict[int, int],
+    current_time: int,
+    active_task_ids_by_station: Dict[int, List[int]],
+) -> tuple[List[ChargingTask], Dict[int, List[int]]]:
+    charged: List[ChargingTask] = []
+    task_by_id = {task.task_id: task for task in tasks}
+    next_active: Dict[int, List[int]] = {}
+
+    for station_id, capacity in chargers_by_station.items():
+        station_active: List[ChargingTask] = []
+        selected_ids: set[int] = set()
+
+        # Non-preemptive: continue tasks that were charging in previous slot.
+        for task_id in active_task_ids_by_station.get(station_id, []):
+            if len(station_active) >= int(capacity):
+                break
+            task = task_by_id.get(task_id)
+            if task is None or task.is_completed() or not task.is_available(current_time):
+                continue
+            station_active.append(task)
+            selected_ids.add(task.task_id)
+
+        # FCFS fill for remaining chargers.
+        waiting = [
+            task
+            for task in tasks
+            if (
+                task.station_id == station_id
+                and (not task.is_completed())
+                and task.is_available(current_time)
+                and task.task_id not in selected_ids
+            )
+        ]
+        waiting.sort(key=lambda t: (t.arrival_time, t.task_id))
+        for task in waiting:
+            if len(station_active) >= int(capacity):
+                break
+            station_active.append(task)
+            selected_ids.add(task.task_id)
+
+        next_active[station_id] = [task.task_id for task in station_active]
+        charged.extend(station_active)
+
+    return charged, next_active
+
+
 def gurobi_peak_charging_policy(
     tasks: List[ChargingTask],
     chargers_by_station: Dict[int, int],

@@ -25,21 +25,22 @@ class Station:
 
     def perform_swapping(
         self,
-        arriving_vehicles: np.ndarray,
+        swap_requests: np.ndarray,
     ) -> Tuple[np.ndarray, np.ndarray]:
-        # arriving_vehicles shape (L+1)
-        total_demand = int(arriving_vehicles.sum())
+        # swap_requests shape (L+1), only levels < L require swapping.
+        total_demand = int(swap_requests[: self.battery_levels].sum())
         actual_swaps = min(total_demand, self.full_batteries, self.swapping_capacity)
 
-        swapped = np.zeros_like(arriving_vehicles)
-        not_swapped = arriving_vehicles.copy()
+        swapped = np.zeros_like(swap_requests)
+        not_swapped = swap_requests.copy()
+        not_swapped[self.battery_levels] = 0
 
         remaining = actual_swaps
         # prioritize low energy levels
         for l in range(self.battery_levels):
             if remaining <= 0:
                 break
-            count = int(arriving_vehicles[l])
+            count = int(swap_requests[l])
             if count <= 0:
                 continue
             s = min(count, remaining)
@@ -53,11 +54,8 @@ class Station:
                 self.pending_charge[l] += int(swapped[l])
                 self.partial_batteries[l] += int(swapped[l])
 
-        # vehicles after swapping: low levels remain, swapped vehicles become full
-        vehicles_after = not_swapped.copy()
-        vehicles_after[self.battery_levels] = int(not_swapped[self.battery_levels] + swapped.sum())
-
-        return swapped, vehicles_after
+        # not_swapped is the remaining swap queue to carry to next slot.
+        return swapped, not_swapped
 
     def generate_charging_tasks(
         self,

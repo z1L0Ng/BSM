@@ -3,6 +3,9 @@ from __future__ import annotations
 import sys
 
 import argparse
+import csv
+import json
+from datetime import datetime
 from pathlib import Path
 
 import numpy as np
@@ -33,6 +36,60 @@ from etaxi_sim.sim.core import Simulation
 from etaxi_sim.sim.metrics import MetricsRecorder
 
 
+def save_episode_logs(
+    metrics: MetricsRecorder,
+    summary: dict,
+    output_root: Path,
+    config_path: str,
+) -> Path:
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = output_root / run_id
+    output_dir.mkdir(parents=True, exist_ok=False)
+
+    default_fields = [
+        "time_slot",
+        "charging_demand",
+        "number_of_swaps",
+        "unmet_battery_demand",
+        "served",
+        "idle_moves",
+        "swap_arrivals",
+        "swap_success_ratio",
+        "deadline_misses",
+        "deadline_miss_ratio",
+        "charging_power_kw",
+        "total_charging_demand_kw",
+        "peak_station_power_kw",
+        "waiting_time_for_battery_slots",
+        "idle_driving_distance",
+        "vacant",
+        "occupied",
+        "full_batteries",
+        "t",
+    ]
+    extras = []
+    if metrics.steps:
+        extras = sorted({k for step in metrics.steps for k in step.keys()} - set(default_fields))
+    fieldnames = default_fields + extras
+
+    with (output_dir / "timeseries.csv").open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for step in metrics.steps:
+            writer.writerow(step)
+
+    summary_payload = {
+        "run_id": run_id,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "config": config_path,
+        "summary": summary,
+    }
+    with (output_dir / "summary.json").open("w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, ensure_ascii=False, indent=2)
+
+    return output_dir
+
+
 def build_stations(
     m: int,
     levels: int,
@@ -60,6 +117,12 @@ def build_stations(
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/ev_yellow_2025_11.yaml")
+    parser.add_argument("--episode-log-dir", default="results/episodes")
+    parser.add_argument(
+        "--save-episode-log",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -145,6 +208,8 @@ def main() -> None:
         solver_time_limit_sec=cfg.model.solver_time_limit_sec,
         metrics=metrics,
         charging_tasks=[],
+        waiting_queue=np.zeros((m, cfg.sim.battery_levels + 1), dtype=int),
+        active_charging_task_ids_by_station={},
         task_counter=0,
         rng=np.random.default_rng(cfg.sim.seed),
     )
@@ -154,10 +219,20 @@ def main() -> None:
 
     summary = metrics.to_summary()
     if metrics.steps:
-        totals = [step["vacant"] + step["occupied"] for step in metrics.steps]
+        totals = [step["vacant"] + step["occupied"] + step["waiting_vehicles"] for step in metrics.steps]
         summary["vehicle_total_min"] = int(min(totals))
         summary["vehicle_total_max"] = int(max(totals))
         summary["initial_vehicles"] = int(initial_vehicles)
+
+    if args.save_episode_log:
+        output_dir = save_episode_logs(
+            metrics=metrics,
+            summary=summary,
+            output_root=Path(args.episode_log_dir),
+            config_path=str(args.config),
+        )
+        summary["episode_log_dir"] = str(output_dir)
+
     print("Simulation complete")
     print(summary)
 
