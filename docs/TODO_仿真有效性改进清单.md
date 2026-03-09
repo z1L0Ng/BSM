@@ -1,6 +1,6 @@
 # TODO：仿真有效性改进清单（讨论版）
 
-更新时间：2026-03-08  
+更新时间：2026-03-09  
 状态：阶段一至阶段三已落地，进入结果解释与策略增强
 
 ## 第一阶段（最优先）：补充实验指标与日志
@@ -51,3 +51,12 @@
   - `Current Algorithm + FCFS`
   - `Heuristic + FCFS`
   - `Ideal schedule + FCFS`
+
+---
+
+## 下一阶段：结果解释与交付（待做）
+
+- [ ] 从 `results/baseline_combinations/full_matrix.csv` 生成对比图（成功率、deadline miss、等待队列、峰值功率）
+- [ ] 固定瓶颈参数子集（如 `swap_capacity=6`）做主结论表，避免平均后掩盖差异
+- [ ] 输出每种 `车辆策略 × FCFS` 的优势/代价说明（服务率 vs 功率峰值 vs 等待）
+- [ ] 清理与归档临时结果（`results/baseline_combinations/_tmp/`、`smoke.csv`）并补充复现实验命令
