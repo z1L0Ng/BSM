@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -17,6 +17,13 @@ except Exception:
     HAS_GUROBI = False
 
 _GUROBI_ENV = None
+_LAST_GUROBI_REPOSITION_TRACE = {
+    "t_start": -1,
+    "status": None,
+    "sol_count": None,
+    "outcome": "unknown",
+    "note": "",
+}
 
 
 @dataclass(frozen=True)
@@ -30,6 +37,25 @@ class RepositionPolicyConfig:
     low_energy_swap_bonus: float = 0.15
     transition_topk: int = 6
     time_limit_sec: float = 3.0
+
+
+def _update_reposition_trace(
+    *,
+    t_start: int,
+    status: int | None,
+    sol_count: int | None,
+    outcome: str,
+    note: str = "",
+) -> None:
+    _LAST_GUROBI_REPOSITION_TRACE["t_start"] = int(t_start)
+    _LAST_GUROBI_REPOSITION_TRACE["status"] = None if status is None else int(status)
+    _LAST_GUROBI_REPOSITION_TRACE["sol_count"] = None if sol_count is None else int(sol_count)
+    _LAST_GUROBI_REPOSITION_TRACE["outcome"] = str(outcome)
+    _LAST_GUROBI_REPOSITION_TRACE["note"] = str(note)
+
+
+def get_last_gurobi_reposition_trace() -> Dict[str, int | str | None]:
+    return dict(_LAST_GUROBI_REPOSITION_TRACE)
 
 
 def _build_model(name: str) -> gp.Model:
@@ -220,8 +246,16 @@ def gurobi_reposition_policy(
     transition: TransitionProbabilities,
     t_start: int,
     config: RepositionPolicyConfig,
+    _retry_stage: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
     if not HAS_GUROBI:
+        _update_reposition_trace(
+            t_start=t_start,
+            status=None,
+            sol_count=None,
+            outcome="no_gurobi",
+            note="gurobipy unavailable",
+        )
         if demand_window.ndim == 1:
             return greedy_same_zone_policy(fleet, demand_window, config)
         return greedy_same_zone_policy(fleet, demand_window[0], config)
@@ -237,6 +271,13 @@ def gurobi_reposition_policy(
     demand_window = demand_window[:H]
 
     if fleet.vacant.sum() <= 0:
+        _update_reposition_trace(
+            t_start=t_start,
+            status=None,
+            sol_count=None,
+            outcome="skip_no_vacant",
+            note="no vacant vehicles",
+        )
         return X, Y
 
     all_states = [(i, l) for i in range(m) for l in range(levels_plus)]
@@ -300,6 +341,12 @@ def gurobi_reposition_policy(
         for k in range(H):
             top_demand = top_demand_by_k[k]
             for i, l in all_states:
+                state_key = (k, i, l)
+                state_out: List[gp.Var] = []
+                r_vars[state_key] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"r_{k}_{i}_{l}")
+                state_out.append(r_vars[state_key])
+                outbound[state_key] = state_out
+
                 feasible = np.where((reachability[i] == 0) & (energy_consumption[i] <= l))[0]
                 if feasible.size == 0:
                     continue
@@ -317,9 +364,6 @@ def gurobi_reposition_policy(
                 if i in feasible_set and i not in swap_targets:
                     swap_targets = [i] + swap_targets
                     swap_targets = swap_targets[: config.top_swap_targets]
-
-                state_key = (k, i, l)
-                state_out: List[gp.Var] = []
 
                 if l > config.swap_low_energy_threshold:
                     for j in service_targets:
@@ -344,11 +388,14 @@ def gurobi_reposition_policy(
                     if l <= config.swap_low_energy_threshold:
                         low_energy_y.append(var)
 
-                r_vars[(k, i, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"r_{k}_{i}_{l}")
-                state_out.append(r_vars[(k, i, l)])
-                outbound[state_key] = state_out
-
         if not x_vars and not y_vars:
+            _update_reposition_trace(
+                t_start=t_start,
+                status=None,
+                sol_count=None,
+                outcome="skip_no_candidates",
+                note="no feasible dispatch vars",
+            )
             return X, Y
 
         # Swap station battery stocks and swap execution
@@ -426,11 +473,16 @@ def gurobi_reposition_policy(
                     o_terms: List[gp.LinExpr] = []
                     v_terms: List[gp.LinExpr] = []
 
-                    # H_{i,l}: from swapping at destination i
-                    if l < levels:
-                        v_terms.append(b_vars[(k, i, l)] - mu_vars[(k, i, l)])
-                    else:
-                        v_terms.append(gp.quicksum(mu_vars[(k, i, ll)] for ll in range(levels_plus)) + b_vars[(k, i, levels)])
+                    # Keep undispatched vacant vehicles at the same state.
+                    v_terms.append(r_vars[(k, i, l)])
+
+                    # Align MPC with simulator semantics: only successful swaps
+                    # and direct full-battery arrivals re-enter dispatchable vacant pool.
+                    if l == levels:
+                        v_terms.append(
+                            gp.quicksum(mu_vars[(k, i, ll)] for ll in range(levels_plus))
+                            + b_vars[(k, i, levels)]
+                        )
 
                     for i_prev in range(m):
                         if i not in trans_targets[(k, i_prev)]:
@@ -470,7 +522,59 @@ def gurobi_reposition_policy(
         model.setObjective(objective, GRB.MAXIMIZE)
         model.optimize()
 
+        status_code = int(model.Status)
+        sol_count = int(model.SolCount)
+        _update_reposition_trace(
+            t_start=t_start,
+            status=status_code,
+            sol_count=sol_count,
+            outcome="optimized" if sol_count > 0 else "no_incumbent",
+            note="",
+        )
+
         if model.SolCount <= 0:
+            if _retry_stage == 0 and H > 1:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=sol_count,
+                    outcome="retry_h1_no_incumbent",
+                    note=f"h={H}, tl={config.time_limit_sec}",
+                )
+                retry_cfg = replace(config, planning_horizon_slots=1)
+                return gurobi_reposition_policy(
+                    fleet=fleet,
+                    demand_window=demand_window[:1],
+                    reachability=reachability,
+                    energy_consumption=energy_consumption,
+                    station_full_batteries=station_full_batteries,
+                    station_swapping_capacity=station_swapping_capacity,
+                    transition=transition,
+                    t_start=t_start,
+                    config=retry_cfg,
+                    _retry_stage=1,
+                )
+            if _retry_stage <= 1 and float(config.time_limit_sec) < 20.0:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=sol_count,
+                    outcome="retry_t20_no_incumbent",
+                    note=f"h={H}, tl={config.time_limit_sec}",
+                )
+                retry_cfg = replace(config, planning_horizon_slots=1, time_limit_sec=20.0)
+                return gurobi_reposition_policy(
+                    fleet=fleet,
+                    demand_window=demand_window[:1],
+                    reachability=reachability,
+                    energy_consumption=energy_consumption,
+                    station_full_batteries=station_full_batteries,
+                    station_swapping_capacity=station_swapping_capacity,
+                    transition=transition,
+                    t_start=t_start,
+                    config=retry_cfg,
+                    _retry_stage=2,
+                )
             raise RuntimeError(f"reposition model has no solution, status={model.Status}")
 
         x_stage: Dict[Tuple[int, int, int], float] = {}
@@ -487,7 +591,22 @@ def gurobi_reposition_policy(
                 y_stage[(i, j, l)] = float(var.X)
 
         return _allocate_integer_dispatch(x_stage, y_stage, fleet.vacant)
-    except gp.GurobiError:
+    except gp.GurobiError as exc:
+        _update_reposition_trace(
+            t_start=t_start,
+            status=None,
+            sol_count=None,
+            outcome="fallback_greedy_gurobi_error",
+            note=str(exc),
+        )
         return greedy_same_zone_policy(fleet, demand_window[0], config)
     except Exception as exc:
+        prev_note = _LAST_GUROBI_REPOSITION_TRACE.get("note", "")
+        _update_reposition_trace(
+            t_start=t_start,
+            status=_LAST_GUROBI_REPOSITION_TRACE.get("status"),  # type: ignore[arg-type]
+            sol_count=_LAST_GUROBI_REPOSITION_TRACE.get("sol_count"),  # type: ignore[arg-type]
+            outcome="exception",
+            note=f"retry_stage={_retry_stage}; {prev_note}; {type(exc).__name__}: {exc}".strip("; "),
+        )
         raise RuntimeError(f"gurobi_reposition_policy failed: {exc}") from exc
