@@ -216,9 +216,9 @@ class Simulation:
             charged_by_station[station.station_id] = len(station_tasks)
 
         # Remove completed or expired tasks, and track charging deadline misses.
-        charging_deadline_misses = sum(
-            1 for task in self.charging_tasks if (t + 1 >= task.deadline and not task.is_completed())
-        )
+        overdue_tasks = [task for task in self.charging_tasks if (t + 1 >= task.deadline and not task.is_completed())]
+        charging_deadline_misses = len(overdue_tasks)
+        charging_deadline_missed_slots = int(sum(int(task.remaining_slots) for task in overdue_tasks))
         self.charging_tasks = [
             task for task in self.charging_tasks if not task.is_completed() and (t + 1 < task.deadline)
         ]
@@ -252,6 +252,7 @@ class Simulation:
             charged_by_station=charged_by_station,
             deadline_misses=swap_deadline_misses,
             charging_deadline_misses=charging_deadline_misses,
+            charging_deadline_missed_slots=charging_deadline_missed_slots,
             charge_power_kw=self.charge_power_kw,
             swap_arrivals=swap_arrivals,
             swap_requests=swap_requests,

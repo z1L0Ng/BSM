@@ -26,6 +26,7 @@ class MetricsRecorder:
         charged_by_station: Dict[int, int] | None = None,
         deadline_misses: int = 0,
         charging_deadline_misses: int = 0,
+        charging_deadline_missed_slots: int = 0,
         charge_power_kw: float = 0.0,
         swap_arrivals: int = 0,
         swap_requests: int = 0,
@@ -76,6 +77,7 @@ class MetricsRecorder:
                 "deadline_misses": int(deadline_misses),
                 "deadline_miss_ratio": deadline_miss_ratio,
                 "charging_deadline_misses": int(charging_deadline_misses),
+                "charging_deadline_missed_slots": int(charging_deadline_missed_slots),
                 "charging_deadline_miss_ratio": charging_deadline_miss_ratio,
                 "waiting_time_for_battery_slots": float(waiting_time_for_battery_slots),
                 "charging_demand": int(charging_demand),
@@ -97,6 +99,7 @@ class MetricsRecorder:
         idle_moves = sum(s["idle_moves"] for s in self.steps)
         deadline_misses = sum(s["deadline_misses"] for s in self.steps)
         charging_deadline_misses = sum(s.get("charging_deadline_misses", 0) for s in self.steps)
+        charging_deadline_missed_slots = sum(s.get("charging_deadline_missed_slots", 0) for s in self.steps)
         swap_arrivals = sum(s["swap_arrivals"] for s in self.steps)
         swap_requests = sum(s["swap_requests"] for s in self.steps)
         successful_swaps = sum(s["number_of_swaps"] for s in self.steps)
@@ -154,6 +157,7 @@ class MetricsRecorder:
             "total_deadline_misses": deadline_misses,
             "deadline_miss_ratio": deadline_miss_ratio,
             "total_charging_deadline_misses": charging_deadline_misses,
+            "total_charging_deadline_missed_slots": charging_deadline_missed_slots,
             "charging_deadline_miss_ratio": charging_deadline_miss_ratio,
             "total_charging_demand": charging_demand,
             "max_total_charging_demand_kw": max_total_charging_demand_kw,

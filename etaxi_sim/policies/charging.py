@@ -131,6 +131,7 @@ def gurobi_peak_charging_policy(
 
         x: Dict[tuple[int, int], gp.Var] = {}
         slack: Dict[int, gp.Var] = {}
+        late: Dict[int, gp.Var] = {}
         task_by_idx: Dict[int, ChargingTask] = {}
 
         for idx, task in enumerate(pending):
@@ -140,16 +141,20 @@ def gurobi_peak_charging_policy(
             feasible_times = [tt for tt in times if avail_start <= tt < avail_end]
             for tt in feasible_times:
                 x[(idx, tt)] = model.addVar(vtype=GRB.BINARY, name=f"x_{idx}_{tt}")
+            remaining_slots = int(task.remaining_slots)
             slack[idx] = model.addVar(
                 vtype=GRB.INTEGER,
                 lb=0,
-                ub=int(task.remaining_slots),
+                ub=remaining_slots,
                 name=f"slack_{idx}",
             )
+            late[idx] = model.addVar(vtype=GRB.BINARY, name=f"late_{idx}")
             model.addConstr(
-                gp.quicksum(x[idx, tt] for tt in feasible_times) + slack[idx] == int(task.remaining_slots),
+                gp.quicksum(x[idx, tt] for tt in feasible_times) + slack[idx] == remaining_slots,
                 name=f"task_slots_{idx}",
             )
+            # Link missed slots and task-level miss indicator.
+            model.addConstr(slack[idx] <= remaining_slots * late[idx], name=f"late_link_{idx}")
 
         for station_id in chargers_by_station:
             cap = int(chargers_by_station[station_id])
@@ -175,7 +180,18 @@ def gurobi_peak_charging_policy(
                     name=f"peak_bind_{station_id}_{tt}",
                 )
 
-        model.setObjective(z + config.miss_penalty * gp.quicksum(slack.values()), GRB.MINIMIZE)
+        # Lexicographic objective:
+        # 1) minimize missed tasks, 2) minimize peak load, 3) minimize missed slots.
+        model.ModelSense = GRB.MINIMIZE
+        model.setObjectiveN(gp.quicksum(late.values()), index=0, priority=3, weight=1.0, name="miss_tasks")
+        model.setObjectiveN(z, index=1, priority=2, weight=1.0, name="peak_kw")
+        model.setObjectiveN(
+            gp.quicksum(slack.values()),
+            index=2,
+            priority=1,
+            weight=float(config.miss_penalty),
+            name="miss_slots",
+        )
         model.optimize()
 
         if model.SolCount <= 0:
