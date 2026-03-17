@@ -57,7 +57,27 @@ for combo in "${COMBOS[@]}"; do
     --reposition-solver "${reposition_solver}" \
     --charging-solver "${charging_solver}" \
     --output-csv "${out_file}" \
-    --resume
+    --resume &
+  sweep_pid=$!
+  terminated_by_deadline=0
+  while kill -0 "${sweep_pid}" 2>/dev/null; do
+    now_epoch="$(TZ="${DEADLINE_TZ}" date "+%s")"
+    if [[ "${now_epoch}" -ge "${deadline_epoch}" ]]; then
+      echo "Reached deadline during ${name}, stopping pid=${sweep_pid}"
+      kill -TERM "${sweep_pid}" 2>/dev/null || true
+      sleep 2
+      kill -KILL "${sweep_pid}" 2>/dev/null || true
+      terminated_by_deadline=1
+      break
+    fi
+    sleep 20
+  done
+  wait "${sweep_pid}" || true
+
+  if [[ "${terminated_by_deadline}" == "1" ]]; then
+    echo "Stopped by deadline. Keep partial progress and resume later."
+    break
+  fi
 
   TMP_DIR="${TMP_DIR}" OUTPUT_CSV="${OUTPUT_CSV}" "${PY_CMD[@]}" - << 'PY'
 import csv
