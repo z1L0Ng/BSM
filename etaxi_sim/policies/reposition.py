@@ -21,9 +21,12 @@ _LAST_GUROBI_REPOSITION_TRACE = {
     "t_start": -1,
     "status": None,
     "sol_count": None,
+    "runtime_sec": None,
     "outcome": "unknown",
     "note": "",
 }
+_GUROBI_REPOSITION_OUTCOME_COUNTS: Dict[str, int] = {}
+_GUROBI_REPOSITION_STATUS_COUNTS: Dict[str, int] = {}
 
 
 @dataclass(frozen=True)
@@ -44,18 +47,45 @@ def _update_reposition_trace(
     t_start: int,
     status: int | None,
     sol_count: int | None,
+    runtime_sec: float | None,
     outcome: str,
     note: str = "",
 ) -> None:
     _LAST_GUROBI_REPOSITION_TRACE["t_start"] = int(t_start)
     _LAST_GUROBI_REPOSITION_TRACE["status"] = None if status is None else int(status)
     _LAST_GUROBI_REPOSITION_TRACE["sol_count"] = None if sol_count is None else int(sol_count)
+    _LAST_GUROBI_REPOSITION_TRACE["runtime_sec"] = (
+        None if runtime_sec is None else float(runtime_sec)
+    )
     _LAST_GUROBI_REPOSITION_TRACE["outcome"] = str(outcome)
     _LAST_GUROBI_REPOSITION_TRACE["note"] = str(note)
+    if outcome:
+        _GUROBI_REPOSITION_OUTCOME_COUNTS[outcome] = _GUROBI_REPOSITION_OUTCOME_COUNTS.get(outcome, 0) + 1
+    if status is not None:
+        key = str(int(status))
+        _GUROBI_REPOSITION_STATUS_COUNTS[key] = _GUROBI_REPOSITION_STATUS_COUNTS.get(key, 0) + 1
 
 
-def get_last_gurobi_reposition_trace() -> Dict[str, int | str | None]:
+def get_last_gurobi_reposition_trace() -> Dict[str, int | float | str | None]:
     return dict(_LAST_GUROBI_REPOSITION_TRACE)
+
+
+def reset_gurobi_reposition_trace_stats() -> None:
+    _LAST_GUROBI_REPOSITION_TRACE["t_start"] = -1
+    _LAST_GUROBI_REPOSITION_TRACE["status"] = None
+    _LAST_GUROBI_REPOSITION_TRACE["sol_count"] = None
+    _LAST_GUROBI_REPOSITION_TRACE["runtime_sec"] = None
+    _LAST_GUROBI_REPOSITION_TRACE["outcome"] = "unknown"
+    _LAST_GUROBI_REPOSITION_TRACE["note"] = ""
+    _GUROBI_REPOSITION_OUTCOME_COUNTS.clear()
+    _GUROBI_REPOSITION_STATUS_COUNTS.clear()
+
+
+def get_gurobi_reposition_trace_stats() -> Dict[str, Dict[str, int]]:
+    return {
+        "outcome_counts": dict(_GUROBI_REPOSITION_OUTCOME_COUNTS),
+        "status_counts": dict(_GUROBI_REPOSITION_STATUS_COUNTS),
+    }
 
 
 def _build_model(name: str) -> gp.Model:
@@ -253,6 +283,7 @@ def gurobi_reposition_policy(
             t_start=t_start,
             status=None,
             sol_count=None,
+            runtime_sec=None,
             outcome="no_gurobi",
             note="gurobipy unavailable",
         )
@@ -275,6 +306,7 @@ def gurobi_reposition_policy(
             t_start=t_start,
             status=None,
             sol_count=None,
+            runtime_sec=None,
             outcome="skip_no_vacant",
             note="no vacant vehicles",
         )
@@ -393,6 +425,7 @@ def gurobi_reposition_policy(
                 t_start=t_start,
                 status=None,
                 sol_count=None,
+                runtime_sec=None,
                 outcome="skip_no_candidates",
                 note="no feasible dispatch vars",
             )
@@ -528,6 +561,7 @@ def gurobi_reposition_policy(
             t_start=t_start,
             status=status_code,
             sol_count=sol_count,
+            runtime_sec=float(model.Runtime),
             outcome="optimized" if sol_count > 0 else "no_incumbent",
             note="",
         )
@@ -538,6 +572,7 @@ def gurobi_reposition_policy(
                     t_start=t_start,
                     status=status_code,
                     sol_count=sol_count,
+                    runtime_sec=float(model.Runtime),
                     outcome="retry_h1_no_incumbent",
                     note=f"h={H}, tl={config.time_limit_sec}",
                 )
@@ -559,6 +594,7 @@ def gurobi_reposition_policy(
                     t_start=t_start,
                     status=status_code,
                     sol_count=sol_count,
+                    runtime_sec=float(model.Runtime),
                     outcome="retry_t20_no_incumbent",
                     note=f"h={H}, tl={config.time_limit_sec}",
                 )
@@ -596,6 +632,7 @@ def gurobi_reposition_policy(
             t_start=t_start,
             status=None,
             sol_count=None,
+            runtime_sec=None,
             outcome="fallback_greedy_gurobi_error",
             note=str(exc),
         )
@@ -606,6 +643,7 @@ def gurobi_reposition_policy(
             t_start=t_start,
             status=_LAST_GUROBI_REPOSITION_TRACE.get("status"),  # type: ignore[arg-type]
             sol_count=_LAST_GUROBI_REPOSITION_TRACE.get("sol_count"),  # type: ignore[arg-type]
+            runtime_sec=_LAST_GUROBI_REPOSITION_TRACE.get("runtime_sec"),  # type: ignore[arg-type]
             outcome="exception",
             note=f"retry_stage={_retry_stage}; {prev_note}; {type(exc).__name__}: {exc}".strip("; "),
         )

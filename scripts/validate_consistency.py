@@ -75,6 +75,10 @@ def main() -> None:
     args = parser.parse_args()
 
     cfg = load_config(args.config)
+    if not (0 <= cfg.sim.sim_start_hour < cfg.sim.sim_end_hour <= 24):
+        raise ValueError("Invalid sim window: require 0 <= sim_start_hour < sim_end_hour <= 24")
+    window_slots = int((cfg.sim.sim_end_hour - cfg.sim.sim_start_hour) * 60 / cfg.sim.time_bin_minutes)
+    effective_horizon = max(1, min(cfg.sim.horizon, window_slots))
     zone_map = load_zone_map(cfg.data.taxi_zone_lookup_path)
     m = len(zone_map.zone_ids)
 
@@ -83,11 +87,13 @@ def main() -> None:
             cfg.data.yellow_tripdata_path,
             zone_map,
             cfg.sim.time_bin_minutes,
-            cfg.sim.horizon,
+            effective_horizon,
             cfg.sim.sim_date,
+            cfg.sim.sim_start_hour,
+            cfg.sim.sim_end_hour,
         )
     else:
-        demand_data = make_synthetic_demand(cfg.sim.horizon, m, cfg.sim.seed)
+        demand_data = make_synthetic_demand(effective_horizon, m, cfg.sim.seed)
 
     if cfg.model.transition_mode == "historical_tripdata" and cfg.data.source == "yellow_tripdata":
         transition = make_transition_from_tripdata(
@@ -95,14 +101,16 @@ def main() -> None:
             zone_ids=zone_map.zone_ids,
             zone_index=zone_map.zone_index,
             time_bin_minutes=cfg.sim.time_bin_minutes,
-            horizon=cfg.sim.horizon,
+            horizon=effective_horizon,
             sim_date=cfg.sim.sim_date,
+            sim_start_hour=cfg.sim.sim_start_hour,
+            sim_end_hour=cfg.sim.sim_end_hour,
             pickup_prob_floor=cfg.model.transition_pickup_floor,
             pickup_prob_ceiling=cfg.model.transition_pickup_ceiling,
             pickup_smoothing_window=cfg.model.transition_pickup_smoothing_window,
         )
     else:
-        transition = make_uniform_transition(cfg.sim.horizon, m)
+        transition = make_uniform_transition(effective_horizon, m)
 
     if cfg.model.distance_mode == "taxi_zones":
         reachability = reachability_from_taxi_zones(cfg.data.taxi_zones_shp_path, zone_map.zone_ids)
@@ -114,7 +122,12 @@ def main() -> None:
 
     initial_vehicles = cfg.sim.initial_vehicles
     if cfg.sim.initial_vehicles_mode == "from_data_peak_overlap" and cfg.data.source == "yellow_tripdata":
-        peak_overlap = estimate_peak_concurrent_trips(cfg.data.yellow_tripdata_path, cfg.sim.sim_date)
+        peak_overlap = estimate_peak_concurrent_trips(
+            cfg.data.yellow_tripdata_path,
+            cfg.sim.sim_date,
+            cfg.sim.sim_start_hour,
+            cfg.sim.sim_end_hour,
+        )
         initial_vehicles = max(1, int(np.ceil(peak_overlap * cfg.sim.initial_vehicles_scale)))
 
     fleet = initialize_fleet(m, cfg.sim.battery_levels, cfg.sim.seed, initial_vehicles)
@@ -135,7 +148,7 @@ def main() -> None:
         energy_consumption=energy_consumption,
         reachability=reachability,
         levels=cfg.sim.battery_levels,
-        horizon=cfg.sim.horizon,
+        horizon=effective_horizon,
         demand_forecast=demand_data.demand,
         charge_rate_levels_per_slot=cfg.sim.charge_rate_levels_per_slot,
         deadline_horizon=cfg.sim.swap_deadline_horizon,
@@ -175,9 +188,9 @@ def main() -> None:
     battery_min = 10**18
     battery_max = -1
 
-    for t in range(cfg.sim.horizon):
+    for t in range(effective_horizon):
         demand_t = demand_data.demand[t]
-        window_end = min(cfg.sim.horizon, t + max(1, cfg.model.reposition_planning_horizon_slots))
+        window_end = min(effective_horizon, t + max(1, cfg.model.reposition_planning_horizon_slots))
         demand_window = demand_data.demand[t:window_end]
 
         rep_cfg = RepositionPolicyConfig(
@@ -291,6 +304,9 @@ def main() -> None:
 
     result = {
         "config": str(args.config),
+        "effective_horizon": int(effective_horizon),
+        "sim_start_hour": int(cfg.sim.sim_start_hour),
+        "sim_end_hour": int(cfg.sim.sim_end_hour),
         "initial_vehicles": int(initial_vehicles),
         "vehicle_total_min": int(vehicle_min),
         "vehicle_total_max": int(vehicle_max),

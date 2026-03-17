@@ -28,6 +28,8 @@ class SimConfig:
     base_load_kw: float
     initial_vehicles_mode: str = "fixed"
     initial_vehicles_scale: float = 1.0
+    sim_start_hour: int = 0
+    sim_end_hour: int = 24
     charge_power_kw: float = 30.0
 
 
@@ -91,6 +93,10 @@ def load_config(path: str | Path) -> Config:
     sim_raw = raw["sim"]
     if "sim_date" not in sim_raw:
         sim_raw["sim_date"] = None
+    if "sim_start_hour" not in sim_raw:
+        sim_raw["sim_start_hour"] = 0
+    if "sim_end_hour" not in sim_raw:
+        sim_raw["sim_end_hour"] = 24
 
     cfg = Config(
         paths=Paths(data_root=data_root, raw_dir=raw_dir),

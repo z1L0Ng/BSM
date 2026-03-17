@@ -1,79 +1,78 @@
 # TODO：仿真有效性改进清单（执行版）
 
-更新时间：2026-03-13  
-状态：阶段一至阶段三已完成，当前进入 P0 异常诊断与全量实验前 gate
+更新时间：2026-03-16  
+当前基线提交：`7f3f046`（已推送 `main`）  
+目标：通过 P0 gate 后，产出可直接写入 paper evaluation 的完整证据链。
 
-## 已完成阶段（归档）
+## 0) 已完成（本周关键）
 
-### 第一阶段：指标与日志
+- [x] 修复充电优化目标与评估口径不一致：
+  - `gurobi charging` 改为分层目标：先最小化任务逾期，再最小化峰值，再最小化逾期 slot。
+  - 文件：`etaxi_sim/policies/charging.py`
+- [x] 新增诊断指标 `charging_deadline_missed_slots`：
+  - 文件：`etaxi_sim/sim/core.py`, `etaxi_sim/sim/metrics.py`
+- [x] 单点 stress 复核（`inventory=10, chargers=3, swap=3`）：
+  - `gurobi+gurobi(after_fix)` 的 `charging_deadline_miss_ratio` 已与 `gurobi+fcfs` 对齐（约 `0.14`）。
+- [x] 诊断脚本与结果归档已入库（见 `results/baseline_combinations/stress_single_*`）。
 
-- [x] `total_served`
-- [x] `battery_swap_success_ratio`
-- [x] `deadline_miss_ratio`（换电请求未满足比例）
-- [x] `charging_deadline_miss_ratio`（充电任务逾期比例）
-- [x] `idle_driving_distance`
-- [x] `waiting_time_for_battery_slots`
-- [x] `timeseries.csv` 与 `summary.json` 稳定输出
+## 1) P0 Gate（必须先过）
 
-### 第二阶段：参数矩阵
+### A. 3756 车辆场景求解稳定性
 
-- [x] `inventory` sweep
-- [x] `chargers` sweep
-- [x] `swap_capacity` sweep
-- [x] 强瓶颈参数网格（stress grid）
+- [ ] 在重定位求解流程记录每时段 `Status/SolCount/Runtime`。
+- [ ] 记录每次 fallback 的触发原因与次数（不得 silent fallback）。
+- [ ] 验收：96 步完整跑通，日志可审计，且无“无解即中断”。
 
-### 第三阶段：基线与组合
+### B. `charging_deadline_miss_ratio` 异常闭环
 
-- [x] `reposition_solver=heuristic`
-- [x] `reposition_solver=ideal`
-- [x] `charging_solver=fcfs`
-- [x] 基线组合结果文件与图表产出
+- [ ] 用新指标拆解：`charging_deadline_misses` vs `charging_deadline_missed_slots` vs `successful_swaps`。
+- [ ] 重新验证异常是否来自旧目标函数（历史 `stress_full_matrix.csv` 结果需谨慎使用）。
+- [ ] 输出 root-cause 结论页（图+表+文字）。
 
-## 当前最高优先（P0）：先解决稳定性与诊断可信度
+### C. 小规模 gate 复跑（48-run）
 
-### A. 3756 车辆场景卡死/无解边界条件
+- [ ] 矩阵：`6 combos × (inventory{5,10} × chargers{3,8} × swap{3,6}) = 48`
+- [ ] 通过条件：
+  - [ ] 无卡死/中断；
+  - [ ] `algorithm+gurobi` 与 `algorithm+fcfs` 在关键指标上趋势合理；
+  - [ ] 不再出现无法解释的系统性 `miss_ratio≈1` 伪异常。
 
-- [ ] 复现并记录 `gurobi_reposition_policy` 在 3756 车辆下每时段求解状态（含 `model.Status`、`SolCount`）
-- [ ] 修复“边界条件处理”而非简单退化：避免 `status=4/9` 直接导致整轮中断
-- [ ] 给出可审计日志字段：每时段是否触发降级、降级原因、降级次数
-- [ ] 验收标准：诊断 episode 可完整跑完且无 silent fallback
+## 2) Paper Evaluation 主实验（Gate 通过后执行）
 
-### B. `charging_deadline_miss_ratio` 异常（algorithm+FCFS ≈ 1.0）
+### D. 全量 162-run 主矩阵
 
-- [ ] 单独输出并核对分子分母：`charging_deadline_misses` 与 `successful_swaps`
-- [ ] 对比 `algorithm+FCFS` 与 `heuristic+FCFS` 的 `successful_swaps` 规模差
-- [ ] 判断是否为“分母过小放大比值”还是“充电任务真实大量逾期”
-- [ ] 形成 1 页 root-cause 结论后再推进全量矩阵
+- [ ] 矩阵：`{gurobi, heuristic, ideal} × {gurobi, fcfs} × 3×3×3 = 162`
+- [ ] 输出：`full_matrix_6combo.csv` + 按组合汇总表。
+- [ ] 主表指标：
+  - [ ] `total_served`
+  - [ ] `battery_swap_success_ratio`
+  - [ ] `deadline_miss_ratio`
+  - [ ] `charging_deadline_miss_ratio`
+  - [ ] `max_station_total_power_kw`
+  - [ ] `total_waiting_vehicles`
 
-### C. 全量实验 gate（未通过不得启动 162-run）
+### E. 24h 时序证据（削峰填谷）
 
-- [ ] 通过 A 与 B 的诊断 gate
-- [ ] 明确主方法与消融口径：`reposition × charging = {gurobi, heuristic, ideal} × {gurobi, fcfs}`
-- [ ] 先跑 stress grid 的 6 组合补齐充电侧证据
-- [ ] 再跑全量参数矩阵
+- [ ] 至少 2 组 episode 对比：`ours(gurobi+gurobi)` vs `heuristic+fcfs`
+- [ ] 图：`charging_power_kw`、`station_total_power_kw`、`waiting_vehicles`
+- [ ] 在正文明确“服务质量 vs 峰值负荷”的 trade-off。
 
-## 次优先（P1）：论文证据补齐
+## 3) 文档一致性与写作收口
 
-### D. 充电策略贡献证据
+- [ ] 更新 `docs/论文公式一致性核对表.md`：补充 gate 结果与最终口径。
+- [ ] 更新 `docs/代码审查报告_Paper对齐核查.md`：区分“历史异常”与“修复后结果”。
+- [ ] 更新 `results/baseline_combinations/stress_summary.md`：替换旧结论，避免引用过时矩阵。
 
-- [ ] stress grid 增补 `* + gurobi charging` 组合
-- [ ] 生成对比表：`served / swap_success / deadline_miss / charging_deadline_miss / peak_power`
+## 4) 当前执行顺序（从现在开始）
 
-### E. 24h 时序图
+1. 执行 48-run gate（进行中）  
+2. 输出 gate 汇总与是否放行结论  
+3. 放行后启动 162-run 全量矩阵  
+4. 完成时序图与 evaluation 文本草稿
 
-- [ ] 选中等压力参数，跑完整 24h episode
-- [ ] 输出 `charging_power_kw`、`station_total_power_kw` 时序
-- [ ] 对比 `ours+gurobi charging` vs `heuristic+fcfs`
+## 5) 2026-03-16 继任者清理进展
 
-## 文档一致性（并行进行）
-
-- [x] `论文公式一致性核对表.md` 增加“已知风险与 gate 条件”
-- [x] `代码审查报告_Paper对齐核查.md` 同步当前代码真实状态（区分“已修复”与“待修复”）
-- [x] `E-Taxi_换电站技术规格说明书_完整版.md` 明确工程扩展：等待队列、Eq.(14) 软约束、FCFS 非抢占
-
-## 本周执行顺序（固定）
-
-1. 先完成 A（卡死边界条件）  
-2. 再完成 B（指标分母诊断）  
-3. 通过 gate 后执行 C（stress 6 组合 -> 全量矩阵）  
-4. 最后收敛 D/E 与文档统一
+- [x] 统一 `06:00-22:00` 口径能力已落地（配置/需求/转移/初始车辆估计同窗）
+- [x] `run_param_sweep.py` 已支持逐 case 落盘与 `--resume` 断点续跑
+- [x] 重定位 trace 已补充 `Runtime` 字段，并输出 fallback/retry/no-incumbent 事件聚合
+- [ ] 仍需实跑 gate 确认：在 3756 车辆规模下是否满足“无卡死 + 可审计”

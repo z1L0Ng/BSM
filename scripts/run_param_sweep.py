@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import sys
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -29,6 +31,11 @@ from etaxi_sim.data.preprocess import (
 )
 from etaxi_sim.models.fleet import initialize_fleet
 from etaxi_sim.models.station import Station
+from etaxi_sim.policies.reposition import (
+    get_gurobi_reposition_trace_stats,
+    get_last_gurobi_reposition_trace,
+    reset_gurobi_reposition_trace_stats,
+)
 from etaxi_sim.sim.core import Simulation
 from etaxi_sim.sim.metrics import MetricsRecorder
 
@@ -62,6 +69,49 @@ def build_stations(
     return stations
 
 
+def compute_effective_horizon(time_bin_minutes: int, horizon: int, start_hour: int, end_hour: int) -> int:
+    if not (0 <= start_hour < end_hour <= 24):
+        raise ValueError("Invalid time window: require 0 <= sim_start_hour < sim_end_hour <= 24")
+    window_slots = int((end_hour - start_hour) * 60 / time_bin_minutes)
+    return max(1, min(horizon, window_slots))
+
+
+def case_key(
+    inventory: int,
+    chargers: int,
+    swap_capacity: int,
+    reposition_solver: str,
+    charging_solver: str,
+) -> tuple[str, str, str, str, str]:
+    return (
+        str(inventory),
+        str(chargers),
+        str(swap_capacity),
+        str(reposition_solver),
+        str(charging_solver),
+    )
+
+
+def load_existing_rows(output_csv: Path) -> list[dict[str, str]]:
+    if not output_csv.exists() or output_csv.stat().st_size == 0:
+        return []
+    with output_csv.open("r", newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def write_rows(output_csv: Path, rows: list[dict]) -> None:
+    if not rows:
+        return
+    fieldnames = sorted({k for row in rows for k in row.keys()})
+    tmp_csv = output_csv.with_suffix(f"{output_csv.suffix}.tmp")
+    with tmp_csv.open("w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+        f.flush()
+    tmp_csv.replace(output_csv)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/ev_yellow_2025_11.yaml")
@@ -71,6 +121,12 @@ def main() -> None:
     parser.add_argument("--output-csv", default="results/param_sweep/summary.csv")
     parser.add_argument("--reposition-solver", default=None)
     parser.add_argument("--charging-solver", default=None)
+    parser.add_argument(
+        "--resume",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="resume from existing output-csv and skip completed cases",
+    )
     args = parser.parse_args()
 
     inventories = parse_int_list(args.inventories)
@@ -78,19 +134,29 @@ def main() -> None:
     swap_capacities = parse_int_list(args.swap_capacities)
 
     cfg = load_config(args.config)
+    effective_horizon = compute_effective_horizon(
+        time_bin_minutes=cfg.sim.time_bin_minutes,
+        horizon=cfg.sim.horizon,
+        start_hour=cfg.sim.sim_start_hour,
+        end_hour=cfg.sim.sim_end_hour,
+    )
     zone_map = load_zone_map(cfg.data.taxi_zone_lookup_path)
     m = len(zone_map.zone_ids)
+    reposition_solver = args.reposition_solver or cfg.model.reposition_solver
+    charging_solver = args.charging_solver or cfg.model.charging_solver
 
     if cfg.data.source == "yellow_tripdata":
         demand_data = load_yellow_trip_demand(
             cfg.data.yellow_tripdata_path,
             zone_map,
             cfg.sim.time_bin_minutes,
-            cfg.sim.horizon,
+            effective_horizon,
             cfg.sim.sim_date,
+            cfg.sim.sim_start_hour,
+            cfg.sim.sim_end_hour,
         )
     else:
-        demand_data = make_synthetic_demand(cfg.sim.horizon, m, cfg.sim.seed)
+        demand_data = make_synthetic_demand(effective_horizon, m, cfg.sim.seed)
 
     if cfg.model.transition_mode == "historical_tripdata" and cfg.data.source == "yellow_tripdata":
         transition = make_transition_from_tripdata(
@@ -98,14 +164,16 @@ def main() -> None:
             zone_ids=zone_map.zone_ids,
             zone_index=zone_map.zone_index,
             time_bin_minutes=cfg.sim.time_bin_minutes,
-            horizon=cfg.sim.horizon,
+            horizon=effective_horizon,
             sim_date=cfg.sim.sim_date,
+            sim_start_hour=cfg.sim.sim_start_hour,
+            sim_end_hour=cfg.sim.sim_end_hour,
             pickup_prob_floor=cfg.model.transition_pickup_floor,
             pickup_prob_ceiling=cfg.model.transition_pickup_ceiling,
             pickup_smoothing_window=cfg.model.transition_pickup_smoothing_window,
         )
     else:
-        transition = make_uniform_transition(cfg.sim.horizon, m)
+        transition = make_uniform_transition(effective_horizon, m)
 
     if cfg.model.distance_mode == "taxi_zones":
         reachability = reachability_from_taxi_zones(cfg.data.taxi_zones_shp_path, zone_map.zone_ids)
@@ -117,19 +185,57 @@ def main() -> None:
 
     initial_vehicles = cfg.sim.initial_vehicles
     if cfg.sim.initial_vehicles_mode == "from_data_peak_overlap" and cfg.data.source == "yellow_tripdata":
-        peak_overlap = estimate_peak_concurrent_trips(cfg.data.yellow_tripdata_path, cfg.sim.sim_date)
+        peak_overlap = estimate_peak_concurrent_trips(
+            cfg.data.yellow_tripdata_path,
+            cfg.sim.sim_date,
+            cfg.sim.sim_start_hour,
+            cfg.sim.sim_end_hour,
+        )
         initial_vehicles = max(1, int(np.ceil(peak_overlap * cfg.sim.initial_vehicles_scale)))
 
     output_csv = Path(args.output_csv)
     output_csv.parent.mkdir(parents=True, exist_ok=True)
 
+    if not args.resume and output_csv.exists():
+        output_csv.unlink()
+
     rows: list[dict] = []
+    if args.resume:
+        rows = load_existing_rows(output_csv)
+    existing_keys: set[tuple[str, str, str, str, str]] = set()
+    for row in rows:
+        try:
+            inventory = int(float(row.get("inventory_per_station", "")))
+            chargers = int(float(row.get("chargers_per_station", "")))
+            swap_capacity = int(float(row.get("swap_capacity_per_station", "")))
+            rep_solver = str(row.get("reposition_solver", ""))
+            chg_solver = str(row.get("charging_solver", ""))
+        except (TypeError, ValueError):
+            continue
+        if not rep_solver or not chg_solver:
+            continue
+        existing_keys.add(case_key(inventory, chargers, swap_capacity, rep_solver, chg_solver))
+
     case_idx = 0
     total_cases = len(inventories) * len(chargers_grid) * len(swap_capacities)
     for inventory in inventories:
         for chargers in chargers_grid:
             for swap_capacity in swap_capacities:
                 case_idx += 1
+                key = case_key(
+                    inventory=inventory,
+                    chargers=chargers,
+                    swap_capacity=swap_capacity,
+                    reposition_solver=reposition_solver,
+                    charging_solver=charging_solver,
+                )
+                if args.resume and key in existing_keys:
+                    print(
+                        f"[{case_idx}/{total_cases}] skip completed "
+                        f"inventory={inventory}, chargers={chargers}, swap_capacity={swap_capacity}"
+                    )
+                    continue
+
                 print(
                     f"[{case_idx}/{total_cases}] inventory={inventory}, "
                     f"chargers={chargers}, swap_capacity={swap_capacity}"
@@ -153,14 +259,14 @@ def main() -> None:
                     energy_consumption=energy_consumption,
                     reachability=reachability,
                     levels=cfg.sim.battery_levels,
-                    horizon=cfg.sim.horizon,
+                    horizon=effective_horizon,
                     demand_forecast=demand_data.demand,
                     charge_rate_levels_per_slot=cfg.sim.charge_rate_levels_per_slot,
                     deadline_horizon=cfg.sim.swap_deadline_horizon,
                     charge_power_kw=cfg.sim.charge_power_kw,
-                    reposition_solver=args.reposition_solver or cfg.model.reposition_solver,
+                    reposition_solver=reposition_solver,
                     reposition_planning_horizon_slots=cfg.model.reposition_planning_horizon_slots,
-                    charging_solver=args.charging_solver or cfg.model.charging_solver,
+                    charging_solver=charging_solver,
                     reposition_idle_cost_weight=cfg.model.reposition_idle_cost_weight,
                     reposition_top_demand_targets=cfg.model.reposition_top_demand_targets,
                     reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
@@ -176,28 +282,99 @@ def main() -> None:
                     rng=np.random.default_rng(cfg.sim.seed),
                 )
 
-                for t in range(cfg.sim.horizon):
+                trace_outcomes = Counter()
+                trace_statuses = Counter()
+                trace_runtime_samples: list[float] = []
+                trace_no_solution_steps = 0
+                use_gurobi_reposition = reposition_solver in {"gurobi", "ideal"}
+                if use_gurobi_reposition:
+                    reset_gurobi_reposition_trace_stats()
+
+                for t in range(effective_horizon):
                     sim.step(t, demand_data.demand[t], cfg.sim.swap_low_energy_threshold)
+                    if use_gurobi_reposition:
+                        trace = get_last_gurobi_reposition_trace()
+                        if int(trace.get("t_start", -1) or -1) != t:
+                            continue
+                        outcome = str(trace.get("outcome", "unknown"))
+                        trace_outcomes[outcome] += 1
+                        status_val = trace.get("status")
+                        if status_val is not None:
+                            trace_statuses[str(int(status_val))] += 1
+                        sol_count = trace.get("sol_count")
+                        if sol_count is None or int(sol_count) <= 0:
+                            trace_no_solution_steps += 1
+                        runtime_sec = trace.get("runtime_sec")
+                        if runtime_sec is not None:
+                            trace_runtime_samples.append(float(runtime_sec))
 
                 summary = metrics.to_summary()
+                trace_event_stats = (
+                    get_gurobi_reposition_trace_stats() if use_gurobi_reposition else {"outcome_counts": {}, "status_counts": {}}
+                )
+                trace_event_outcomes = trace_event_stats["outcome_counts"]
+                trace_retry_events = int(
+                    sum(
+                        count
+                        for outcome, count in trace_event_outcomes.items()
+                        if outcome.startswith("retry_") or outcome.startswith("fallback_")
+                    )
+                )
+                trace_no_incumbent_events = int(
+                    sum(
+                        trace_event_outcomes.get(name, 0)
+                        for name in ("no_incumbent", "retry_h1_no_incumbent", "retry_t20_no_incumbent")
+                    )
+                )
                 row = {
                     "inventory_per_station": inventory,
                     "chargers_per_station": chargers,
                     "swap_capacity_per_station": swap_capacity,
-                    "reposition_solver": args.reposition_solver or cfg.model.reposition_solver,
-                    "charging_solver": args.charging_solver or cfg.model.charging_solver,
+                    "reposition_solver": reposition_solver,
+                    "charging_solver": charging_solver,
+                    "sim_start_hour": cfg.sim.sim_start_hour,
+                    "sim_end_hour": cfg.sim.sim_end_hour,
+                    "effective_horizon": effective_horizon,
+                    "reposition_step_outcome_counts": json.dumps(
+                        dict(trace_outcomes), ensure_ascii=False, sort_keys=True
+                    ),
+                    "reposition_step_status_counts": json.dumps(
+                        dict(trace_statuses), ensure_ascii=False, sort_keys=True
+                    ),
+                    "reposition_step_no_solution_steps": trace_no_solution_steps,
+                    "reposition_step_runtime_sec_avg": (
+                        float(np.mean(trace_runtime_samples)) if trace_runtime_samples else 0.0
+                    ),
+                    "reposition_step_runtime_sec_p95": (
+                        float(np.quantile(np.array(trace_runtime_samples, dtype=float), 0.95))
+                        if trace_runtime_samples
+                        else 0.0
+                    ),
+                    "reposition_step_runtime_sec_max": (
+                        float(max(trace_runtime_samples)) if trace_runtime_samples else 0.0
+                    ),
+                    "reposition_event_outcome_counts": json.dumps(
+                        dict(trace_event_outcomes), ensure_ascii=False, sort_keys=True
+                    ),
+                    "reposition_event_status_counts": json.dumps(
+                        dict(trace_event_stats["status_counts"]), ensure_ascii=False, sort_keys=True
+                    ),
+                    "reposition_event_retry_count": trace_retry_events,
+                    "reposition_event_no_incumbent_count": trace_no_incumbent_events,
                 }
                 row.update(summary)
                 rows.append(row)
+                existing_keys.add(key)
+                write_rows(output_csv, rows)
+                print(
+                    f"  saved case -> {output_csv} "
+                    f"(rows={len(rows)}, retry_events={trace_retry_events}, no_solution_steps={trace_no_solution_steps})"
+                )
 
     if rows:
-        fieldnames = sorted({k for row in rows for k in row.keys()})
-        with output_csv.open("w", newline="", encoding="utf-8") as f:
-            writer = csv.DictWriter(f, fieldnames=fieldnames)
-            writer.writeheader()
-            writer.writerows(rows)
-
-    print(f"Saved sweep summary to: {output_csv}")
+        print(f"Saved sweep summary to: {output_csv} (rows={len(rows)})")
+    else:
+        print(f"No rows written. Output path: {output_csv}")
 
 
 if __name__ == "__main__":
