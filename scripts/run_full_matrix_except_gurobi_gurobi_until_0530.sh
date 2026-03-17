@@ -24,9 +24,9 @@ mkdir -p "${TMP_DIR}"
 
 declare -a COMBOS=(
   "heuristic_plus_fcfs heuristic fcfs"
-  "ideal_plus_fcfs ideal fcfs"
   "algorithm_plus_fcfs gurobi fcfs"
   "heuristic_plus_gurobi heuristic gurobi"
+  "ideal_plus_fcfs ideal fcfs"
   "ideal_plus_gurobi ideal gurobi"
 )
 
