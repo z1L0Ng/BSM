@@ -5,24 +5,29 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "${ROOT_DIR}"
 
 CONFIG_PATH="${1:-configs/ev_yellow_2025_11_eval_6_22_fcfs.yaml}"
-OUTPUT_CSV="${2:-results/baseline_combinations/full_matrix_nogurobi_6_22.csv}"
+OUTPUT_CSV="${2:-results/baseline_combinations/full_matrix_except_gurobi_gurobi_6_22.csv}"
 PYTHON_BIN="${PYTHON_BIN:-/opt/anaconda3/envs/bsm/bin/python}"
 CONDA_ENV="${CONDA_ENV:-}"
+
+INVENTORIES="${INVENTORIES:-5,10,20}"
+CHARGERS="${CHARGERS:-3,5,8}"
+SWAP_CAPACITIES="${SWAP_CAPACITIES:-3,6,9}"
+DEADLINE_LOCAL="${DEADLINE_LOCAL:-2026-03-17 05:30:00}"
+DEADLINE_TZ="${DEADLINE_TZ:-America/Chicago}"
 
 export PROJ_DATA="/opt/anaconda3/envs/bsm/share/proj"
 export PROJ_LIB="/opt/anaconda3/envs/bsm/share/proj"
 
-INVENTORIES="5,10,20"
-CHARGERS="3,5,8"
-SWAP_CAPACITIES="3,6,9"
-
 OUT_DIR="$(dirname "${OUTPUT_CSV}")"
-TMP_DIR="${OUT_DIR}/_tmp_full_matrix_nogurobi_6_22"
+TMP_DIR="${OUT_DIR}/_tmp_full_matrix_except_gurobi_gurobi_6_22"
 mkdir -p "${TMP_DIR}"
-rm -f "${TMP_DIR}"/*.csv
 
 declare -a COMBOS=(
   "heuristic_plus_fcfs heuristic fcfs"
+  "ideal_plus_fcfs ideal fcfs"
+  "algorithm_plus_fcfs gurobi fcfs"
+  "heuristic_plus_gurobi heuristic gurobi"
+  "ideal_plus_gurobi ideal gurobi"
 )
 
 if [[ -n "${CONDA_ENV}" ]]; then
@@ -31,7 +36,16 @@ else
   PY_CMD=("${PYTHON_BIN}")
 fi
 
+deadline_epoch="$(TZ="${DEADLINE_TZ}" date -j -f "%Y-%m-%d %H:%M:%S" "${DEADLINE_LOCAL}" "+%s")"
+echo "Run deadline (${DEADLINE_TZ}): ${DEADLINE_LOCAL} (epoch=${deadline_epoch})"
+
 for combo in "${COMBOS[@]}"; do
+  now_epoch="$(TZ="${DEADLINE_TZ}" date "+%s")"
+  if [[ "${now_epoch}" -ge "${deadline_epoch}" ]]; then
+    echo "Reached deadline, stop launching new combos."
+    break
+  fi
+
   read -r name reposition_solver charging_solver <<< "${combo}"
   out_file="${TMP_DIR}/${name}.csv"
   echo "Running ${name}: reposition=${reposition_solver}, charging=${charging_solver}"
@@ -44,9 +58,8 @@ for combo in "${COMBOS[@]}"; do
     --charging-solver "${charging_solver}" \
     --output-csv "${out_file}" \
     --resume
-done
 
-TMP_DIR="${TMP_DIR}" OUTPUT_CSV="${OUTPUT_CSV}" "${PY_CMD[@]}" - << 'PY'
+  TMP_DIR="${TMP_DIR}" OUTPUT_CSV="${OUTPUT_CSV}" "${PY_CMD[@]}" - << 'PY'
 import csv
 import os
 from pathlib import Path
@@ -64,7 +77,7 @@ for path in sorted(tmp_dir.glob("*.csv")):
             rows.append(row)
 
 if not rows:
-    raise RuntimeError("No rows were generated from no-gurobi full matrix sweep.")
+    raise RuntimeError("No rows were generated from except-gurobi-gurobi matrix sweep.")
 
 fieldnames = sorted({k for row in rows for k in row.keys()})
 output_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -73,6 +86,9 @@ with output_csv.open("w", encoding="utf-8", newline="") as f:
     writer.writeheader()
     writer.writerows(rows)
 
-print(f"Saved no-gurobi full matrix to: {output_csv}")
+print(f"Saved matrix snapshot to: {output_csv}")
 print(f"Rows: {len(rows)}")
 PY
+done
+
+echo "Done: until deadline loop finished."

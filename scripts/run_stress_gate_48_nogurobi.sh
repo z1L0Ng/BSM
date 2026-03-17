@@ -19,13 +19,18 @@ SWAP_CAPACITIES="3,6"
 OUT_DIR="$(dirname "${OUTPUT_CSV}")"
 TMP_DIR="${OUT_DIR}/_tmp_stress_gate48_nogurobi"
 mkdir -p "${TMP_DIR}"
+rm -f "${TMP_DIR}"/*.csv
 
 INCLUDE_GUROBI_REPOSITION="${INCLUDE_GUROBI_REPOSITION:-0}"
+INCLUDE_IDEAL="${INCLUDE_IDEAL:-0}"
 
 declare -a COMBOS=(
   "heuristic_plus_fcfs heuristic fcfs"
-  "ideal_plus_fcfs ideal fcfs"
 )
+
+if [[ "${INCLUDE_IDEAL}" == "1" ]]; then
+  COMBOS+=("ideal_plus_fcfs ideal fcfs")
+fi
 
 if [[ "${INCLUDE_GUROBI_REPOSITION}" == "1" ]]; then
   COMBOS+=("algorithm_plus_fcfs gurobi fcfs")
