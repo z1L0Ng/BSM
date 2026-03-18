@@ -1,11 +1,11 @@
 # Gurobi reposition 瓶颈与优化报告
 
 ## 结论摘要
-- 在固定 case（06:00-22:00，inv=5，chargers=5，swap=6，reposition=gurobi，charging=fcfs）下，主要瓶颈是 **模型构建阶段**，不是 optimize 阶段。
-- 关闭预聚合时，单步 build 中位数约 70.29s；开启预聚合后降至 11.04s（-84.29%）。
-- 单步总耗时（run wall-time，中位数）从 81.22s 降至 21.98s（-72.93%）。
-- optimize 时间基本不变（约 10.04s），说明改动主要命中“重复表达式构建”热点。
-- 在严格语义（禁 fallback/禁缩 horizon）下，两组都在 step=0 出现 `status=9` 且无 incumbent，质量指标暂无法做完整对齐验证。
+- 固定 case（06:00-22:00，inv=5，chargers=5，swap=6，gurobi+fcfs）下，build 瓶颈已被命中：预聚合后 build 中位数 11.04s，相比禁预聚合 70.29s，下降 84.29%。
+- 本轮 strict 参数扫（12 组：method/crossover/time_limit/numeric_focus）全部 `status=9, sol_count=0`，说明当前阻塞点不在这组参数组合，而在“首个 incumbent 可得性”。
+- 在 strict 下，随着 `time_limit` 从 10→15→20 秒，optimize 中位数近似线性增长（10.03→15.07→20.06s），而 build 基本稳定（约 10.9s）。
+- 新增 build 子阶段审计后，热点位于表达式聚合（约 43%）与变量构建（约 29%）；约束下发约 26%，候选集准备约 0.39s。
+- 本轮仅做等价重构/诊断增强/求解参数接口暴露，未改目标函数与核心约束语义，未启用 fallback 或缩 horizon。
 
 ## 证据表格（前后对比）
 
@@ -39,7 +39,7 @@ python scripts/run_reposition_diagnostic.py \
   --output-summary-json results/diagnostics/reposition_perf_after_run1.json
 ```
 
-### 性能对比（中位数）
+### 表 1：建模优化前后（中位数）
 
 | 指标 | Before（禁预聚合） | After（开预聚合） | 变化 |
 |---|---:|---:|---:|
@@ -55,13 +55,47 @@ python scripts/run_reposition_diagnostic.py \
 - `results/diagnostics/reposition_perf_after_run{1..3}.csv/.json`
 - `results/diagnostics/reposition_perf_compare_summary.json`
 
-### 结果质量（served / swap_success / miss / waiting）
-- Before 与 After 在严格语义下均在 step=0 报 `status=9, sol_count=0` 并抛出异常，因此未产生有效 episode 级 KPI。
-- 本轮结论聚焦于“真实瓶颈定位与构建性能修复”，质量回归需在后续拿到 incumbent 后再补齐。
+### 表 2：Strict 参数扫（12 组）汇总
+
+| 分组口径 | 结果 |
+|---|---|
+| 参数维度 | `method={2,1}, crossover={0,1}, time_limit={10,15,20}, numeric_focus={0,1}`（按优先级选取 12 组） |
+| 固定 case | `06-22, inv=5, chargers=5, swap=6, reposition=gurobi, charging=fcfs, strict` |
+| incumbent 可得性 | `0/12`（全部 `sol_count=0`） |
+| 状态码分布 | `status=9`：12/12 |
+| 失败归因 | `RuntimeError: ... no solution, status=9`：12/12 |
+| 最快组合（仅 wall-time） | `method=2, crossover=0, time_limit=10, numeric_focus=0`，`run_wall_time=21.71s`（仍无 incumbent） |
+
+### 表 3：按 time_limit 的中位数（Strict 参数扫）
+
+| time_limit_sec | run_wall_time_sec | step_build_time_sec | step_optimize_time_sec |
+|---:|---:|---:|---:|
+| 10 | 21.81 | 10.89 | 10.03 |
+| 15 | 26.88 | 10.93 | 15.07 |
+| 20 | 31.88 | 10.90 | 20.06 |
+
+来源：
+- `results/diagnostics/reposition_solver_param_sweep.csv`
+- `results/diagnostics/reposition_solver_param_sweep.summary.json`
+
+### 表 4：build 子阶段分解（step=0，strict，time_limit=10）
+
+| 子阶段 | 耗时（秒） | build 内占比 |
+|---|---:|---:|
+| candidate_prep | 0.39 | - |
+| vars_build | 3.13 | 29.05% |
+| expressions_build | 4.63 | 42.96% |
+| constraints_build | 2.78 | 25.78% |
+| objective_build | 0.24 | 2.21% |
+| total_build | 10.90 | 100% |
+
+来源：
+- `results/diagnostics/_smoke_diag.csv`
 
 ## 风险与后续建议
-- 风险 1：严格模式下无 incumbent（`status=9`）仍会阻断完整仿真，说明当前 case 在 `solver_time_limit_sec=10` 下求解阶段仍是瓶颈之一。
-- 风险 2：本轮已显著降低 build 时间，但 optimize 阶段无改善，后续需继续做求解参数与模型数值稳定性优化。
-- 建议 1：在不改语义前提下，继续做求解参数扫（如 method/crossover/数值容忍度）并记录同口径证据。
-- 建议 2：在严格模式下增加“单步可行解可得性”专项诊断（日志化 barrier/simplex 迭代统计），先解决 no-incumbent，再做完整 KPI 回归。
-- 建议 3：当前 `--max-run-seconds` 已纳入诊断流程，建议后续所有 baseline 命令默认带该约束，避免运行时间失控。
+- 风险 1：strict 下 `sol_count=0` 会阻断 episode KPI（`served/swap_success/miss/waiting`）回归；当前仅能完成性能与失败归因层面验证。
+- 风险 2：表达式构建虽已显著降耗，但仍占 build 最大头；若不继续做复用/缓存，后续扩规模会再次放大。
+- 风险 3：求解阶段随 `time_limit` 线性增长但无 incumbent，说明“仅延长时限”不是有效策略。
+- 建议 1：下一轮做“incumbent 可得性专项诊断”（保语义）：输出 Gurobi 迭代日志摘要（presolve/迭代数/终止原因）并补 8-12 组参数扫，仅针对可行解可得性。
+- 建议 2：在不改目标与约束语义前提下，继续做表达式复用（重复 quicksum 的缓存化）并以 build 子阶段中位数做验收。
+- 建议 3：所有基线与参数扫维持 `--max-run-seconds`（当前 240s）硬限制，避免诊断运行时间失控。

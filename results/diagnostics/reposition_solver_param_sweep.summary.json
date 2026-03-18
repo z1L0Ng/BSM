@@ -1,0 +1,23 @@
+{
+  "config": "configs/ev_yellow_2025_11_eval_6_22_fcfs.yaml",
+  "python_bin": "/opt/anaconda3/envs/bsm/bin/python",
+  "fixed_case": {
+    "inventory": 5,
+    "chargers": 5,
+    "swap_capacity": 6,
+    "reposition_solver": "gurobi",
+    "charging_solver": "fcfs",
+    "strict_mode": true
+  },
+  "max_steps": 1,
+  "max_run_seconds_per_run": 240.0,
+  "plan_size": 12,
+  "selected_combo_count": 12,
+  "at_least_one_incumbent": false,
+  "best_param_id": null,
+  "best_candidate": null,
+  "failure_reason_counts": {
+    "RuntimeError: gurobi_reposition_policy failed: reposition model has no solution, status=9": 12
+  },
+  "output_csv": "/Users/zilongzeng/.codex/worktrees/c4eb/BSM/results/diagnostics/reposition_solver_param_sweep.csv"
+}

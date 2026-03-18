@@ -45,6 +45,9 @@ class Simulation:
     reposition_top_swap_targets: int
     reposition_low_energy_swap_bonus: float
     reposition_transition_topk: int
+    reposition_solver_method: int
+    reposition_solver_crossover: int
+    reposition_numeric_focus: int
     reposition_eliminate_auxiliary_vars: bool
     reposition_preaggregate_transitions: bool
     charging_miss_penalty: float
@@ -74,6 +77,9 @@ class Simulation:
             low_energy_swap_bonus=self.reposition_low_energy_swap_bonus,
             transition_topk=self.reposition_transition_topk,
             time_limit_sec=self.solver_time_limit_sec,
+            solver_method=self.reposition_solver_method,
+            solver_crossover=self.reposition_solver_crossover,
+            numeric_focus=self.reposition_numeric_focus,
             eliminate_auxiliary_vars=self.reposition_eliminate_auxiliary_vars,
             preaggregate_transitions=self.reposition_preaggregate_transitions,
         )

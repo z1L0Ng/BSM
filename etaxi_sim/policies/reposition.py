@@ -25,6 +25,11 @@ _TRACE_DEFAULTS = {
     "sol_count": None,
     "runtime_sec": None,
     "build_time_sec": None,
+    "candidate_prep_time_sec": None,
+    "vars_build_time_sec": None,
+    "expressions_build_time_sec": None,
+    "constraints_build_time_sec": None,
+    "objective_build_time_sec": None,
     "optimize_time_sec": None,
     "wall_time_sec": None,
     "outcome": "unknown",
@@ -70,6 +75,7 @@ class RepositionPolicyConfig:
     time_limit_sec: float = 3.0
     solver_method: int = 2
     solver_crossover: int = 0
+    numeric_focus: int = 0
     eliminate_auxiliary_vars: bool = True
     preaggregate_transitions: bool = True
     allow_no_incumbent_retry: bool = False
@@ -365,6 +371,7 @@ def gurobi_reposition_policy(
     all_states = [(i, l) for i in range(m) for l in range(levels_plus)]
 
     # Candidate dispatch destinations by state/time.
+    candidate_prep_start = perf_counter()
     top_demand_by_k = [
         np.argsort(-demand_window[k])[: max(1, config.top_demand_targets)] for k in range(H)
     ]
@@ -405,17 +412,21 @@ def gurobi_reposition_policy(
             trans_targets[(k, i_prev)] = targets
             for i in targets:
                 incoming_prev_by_target[(k, int(i))].append(i_prev)
+    candidate_prep_time_sec = float(perf_counter() - candidate_prep_start)
 
     try:
         build_start = perf_counter()
         trace_extra = _trace_extra_defaults()
+        trace_extra["candidate_prep_time_sec"] = candidate_prep_time_sec
 
         model = _build_model("fleet_reposition_mpc_vo")
         model.Params.OutputFlag = 0
         model.Params.TimeLimit = config.time_limit_sec
         model.Params.Method = int(config.solver_method)
         model.Params.Crossover = int(config.solver_crossover)
+        model.Params.NumericFocus = int(config.numeric_focus)
 
+        vars_build_start = perf_counter()
         # State expressions (equivalent elimination of v/o auxiliary variables).
         v_state: Dict[Tuple[int, int, int], gp.LinExpr | float] = {}
         o_state: Dict[Tuple[int, int, int], gp.LinExpr | float] = {}
@@ -543,7 +554,9 @@ def gurobi_reposition_policy(
             for k in range(H)
             for j in range(m)
         }
+        vars_build_time_sec = float(perf_counter() - vars_build_start)
 
+        expr_build_start = perf_counter()
         # Pre-aggregate service flow by destination and level to avoid rebuilding
         # identical quicksum expressions in every transition constraint.
         service_state_expr: Dict[Tuple[int, int, int], gp.LinExpr] = {}
@@ -626,7 +639,9 @@ def gurobi_reposition_policy(
                 for l in range(levels_plus):
                     o_state[(k + 1, i, l)] = next_o_state[(i, l)]
                     v_state[(k + 1, i, l)] = next_v_state[(i, l)]
+        expressions_build_time_sec = float(perf_counter() - expr_build_start)
 
+        constraints_build_start = perf_counter()
         # Dispatch feasibility from vacant states.
         for k in range(H):
             for i in range(m):
@@ -687,7 +702,9 @@ def gurobi_reposition_policy(
                     name=f"served_by_supply_{k}_{j}",
                 )
                 constr_counts["served_by_supply_constr_count"] += 1
+        constraints_build_time_sec = float(perf_counter() - constraints_build_start)
 
+        objective_build_start = perf_counter()
         objective = (
             config.service_reward
             * gp.quicksum((0.95**k) * served[(k, j)] for k in range(H) for j in range(m))
@@ -695,6 +712,7 @@ def gurobi_reposition_policy(
             + config.low_energy_swap_bonus * gp.quicksum(low_energy_y)
         )
         model.setObjective(objective, GRB.MAXIMIZE)
+        objective_build_time_sec = float(perf_counter() - objective_build_start)
         model.update()
         build_time_sec = float(perf_counter() - build_start)
         num_nz: int | None
@@ -705,6 +723,10 @@ def gurobi_reposition_policy(
         trace_extra.update(
             {
                 "build_time_sec": build_time_sec,
+                "vars_build_time_sec": vars_build_time_sec,
+                "expressions_build_time_sec": expressions_build_time_sec,
+                "constraints_build_time_sec": constraints_build_time_sec,
+                "objective_build_time_sec": objective_build_time_sec,
                 "num_vars": int(model.NumVars),
                 "num_constrs": int(model.NumConstrs),
                 "num_nz": num_nz,
@@ -830,6 +852,11 @@ def gurobi_reposition_policy(
         extra.update(
             {
                 "build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("build_time_sec"),  # type: ignore[dict-item]
+                "candidate_prep_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("candidate_prep_time_sec"),  # type: ignore[dict-item]
+                "vars_build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("vars_build_time_sec"),  # type: ignore[dict-item]
+                "expressions_build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("expressions_build_time_sec"),  # type: ignore[dict-item]
+                "constraints_build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("constraints_build_time_sec"),  # type: ignore[dict-item]
+                "objective_build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("objective_build_time_sec"),  # type: ignore[dict-item]
                 "optimize_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("optimize_time_sec"),  # type: ignore[dict-item]
                 "wall_time_sec": float(perf_counter() - wall_start),
                 "num_vars": _LAST_GUROBI_REPOSITION_TRACE.get("num_vars"),  # type: ignore[dict-item]

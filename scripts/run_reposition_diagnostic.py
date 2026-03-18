@@ -81,6 +81,24 @@ def main() -> None:
         default=None,
         help="override solver time limit for reposition/charging models",
     )
+    parser.add_argument(
+        "--reposition-solver-method",
+        type=int,
+        default=None,
+        help="override Gurobi Method for reposition model",
+    )
+    parser.add_argument(
+        "--reposition-solver-crossover",
+        type=int,
+        default=None,
+        help="override Gurobi Crossover for reposition model",
+    )
+    parser.add_argument(
+        "--reposition-numeric-focus",
+        type=int,
+        default=None,
+        help="override Gurobi NumericFocus for reposition model",
+    )
     parser.add_argument("--inventory", type=int, default=None)
     parser.add_argument("--chargers", type=int, default=None)
     parser.add_argument("--swap-capacity", type=int, default=None)
@@ -205,6 +223,21 @@ def main() -> None:
         reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
         reposition_low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
         reposition_transition_topk=cfg.model.reposition_transition_topk,
+        reposition_solver_method=(
+            int(args.reposition_solver_method)
+            if args.reposition_solver_method is not None
+            else cfg.model.reposition_solver_method
+        ),
+        reposition_solver_crossover=(
+            int(args.reposition_solver_crossover)
+            if args.reposition_solver_crossover is not None
+            else cfg.model.reposition_solver_crossover
+        ),
+        reposition_numeric_focus=(
+            int(args.reposition_numeric_focus)
+            if args.reposition_numeric_focus is not None
+            else cfg.model.reposition_numeric_focus
+        ),
         reposition_eliminate_auxiliary_vars=eliminate_auxiliary_vars,
         reposition_preaggregate_transitions=preaggregate_transitions,
         charging_miss_penalty=cfg.model.charging_miss_penalty,
@@ -245,6 +278,11 @@ def main() -> None:
             "reposition_sol_count": trace.get("sol_count"),
             "reposition_runtime_sec": trace.get("runtime_sec"),
             "reposition_build_time_sec": trace.get("build_time_sec"),
+            "reposition_candidate_prep_time_sec": trace.get("candidate_prep_time_sec"),
+            "reposition_vars_build_time_sec": trace.get("vars_build_time_sec"),
+            "reposition_expressions_build_time_sec": trace.get("expressions_build_time_sec"),
+            "reposition_constraints_build_time_sec": trace.get("constraints_build_time_sec"),
+            "reposition_objective_build_time_sec": trace.get("objective_build_time_sec"),
             "reposition_optimize_time_sec": trace.get("optimize_time_sec"),
             "reposition_wall_time_sec": trace.get("wall_time_sec"),
             "reposition_outcome": trace.get("outcome"),
@@ -291,6 +329,11 @@ def main() -> None:
         "reposition_sol_count",
         "reposition_runtime_sec",
         "reposition_build_time_sec",
+        "reposition_candidate_prep_time_sec",
+        "reposition_vars_build_time_sec",
+        "reposition_expressions_build_time_sec",
+        "reposition_constraints_build_time_sec",
+        "reposition_objective_build_time_sec",
         "reposition_optimize_time_sec",
         "reposition_wall_time_sec",
         "reposition_outcome",
@@ -352,6 +395,21 @@ def main() -> None:
         ),
         "solver_time_limit_sec": float(
             args.solver_time_limit_sec if args.solver_time_limit_sec is not None else cfg.model.solver_time_limit_sec
+        ),
+        "reposition_solver_method": int(
+            args.reposition_solver_method
+            if args.reposition_solver_method is not None
+            else cfg.model.reposition_solver_method
+        ),
+        "reposition_solver_crossover": int(
+            args.reposition_solver_crossover
+            if args.reposition_solver_crossover is not None
+            else cfg.model.reposition_solver_crossover
+        ),
+        "reposition_numeric_focus": int(
+            args.reposition_numeric_focus
+            if args.reposition_numeric_focus is not None
+            else cfg.model.reposition_numeric_focus
         ),
         "reposition_eliminate_auxiliary_vars": bool(eliminate_auxiliary_vars),
         "reposition_preaggregate_transitions": bool(preaggregate_transitions),
