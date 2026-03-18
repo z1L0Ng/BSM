@@ -37,6 +37,20 @@ _TRACE_DEFAULTS = {
     "num_vars": None,
     "num_constrs": None,
     "num_nz": None,
+    "iter_count": None,
+    "bar_iter_count": None,
+    "obj_val": None,
+    "obj_bound": None,
+    "solver_method": None,
+    "solver_crossover": None,
+    "numeric_focus": None,
+    "presolve": None,
+    "lp_warm_start_enabled": None,
+    "lp_warm_start_mode": None,
+    "lp_warm_start_applied": None,
+    "lp_warm_start_var_count": None,
+    "lp_warm_start_nonzero_count": None,
+    "lp_warm_start_note": "",
     "use_preaggregation": None,
     "use_aux_elimination": None,
     "x_var_count": 0,
@@ -76,6 +90,9 @@ class RepositionPolicyConfig:
     solver_method: int = 2
     solver_crossover: int = 0
     numeric_focus: int = 0
+    presolve: int = -1
+    use_lp_primal_start: bool = True
+    lp_warm_start_mode: int = 2
     eliminate_auxiliary_vars: bool = True
     preaggregate_transitions: bool = True
     allow_no_incumbent_retry: bool = False
@@ -312,6 +329,49 @@ def _allocate_integer_dispatch(
     return X, Y
 
 
+def _set_lp_primal_start(var: gp.Var, value: float) -> bool:
+    try:
+        var.PStart = float(value)
+        return True
+    except Exception:
+        # Fallback for environments where PStart is unavailable.
+        try:
+            var.Start = float(value)
+            return True
+        except Exception:
+            return False
+
+
+def _apply_zero_dispatch_lp_primal_start(
+    *,
+    x_vars: Dict[Tuple[int, int, int, int], gp.Var],
+    y_vars: Dict[Tuple[int, int, int, int], gp.Var],
+    r_vars: Dict[Tuple[int, int, int], gp.Var],
+    b_vars: Dict[Tuple[int, int, int], gp.Var],
+    mu_vars: Dict[Tuple[int, int, int], gp.Var],
+    served: Dict[Tuple[int, int], gp.Var],
+    full_stock: Dict[Tuple[int, int], gp.Var],
+    station_full_batteries: np.ndarray,
+) -> tuple[int, int]:
+    set_count = 0
+    nonzero_count = 0
+
+    zero_blocks = (x_vars, y_vars, r_vars, b_vars, mu_vars, served)
+    for block in zero_blocks:
+        for var in block.values():
+            if _set_lp_primal_start(var, 0.0):
+                set_count += 1
+
+    for (_, j), var in full_stock.items():
+        value = float(station_full_batteries[j])
+        if _set_lp_primal_start(var, value):
+            set_count += 1
+            if abs(value) > 1e-12:
+                nonzero_count += 1
+
+    return set_count, nonzero_count
+
+
 def gurobi_reposition_policy(
     fleet: FleetState,
     demand_window: np.ndarray,
@@ -425,6 +485,20 @@ def gurobi_reposition_policy(
         model.Params.Method = int(config.solver_method)
         model.Params.Crossover = int(config.solver_crossover)
         model.Params.NumericFocus = int(config.numeric_focus)
+        model.Params.Presolve = int(config.presolve)
+        if bool(config.use_lp_primal_start):
+            model.Params.LPWarmStart = int(config.lp_warm_start_mode)
+
+        trace_extra.update(
+            {
+                "solver_method": int(config.solver_method),
+                "solver_crossover": int(config.solver_crossover),
+                "numeric_focus": int(config.numeric_focus),
+                "presolve": int(config.presolve),
+                "lp_warm_start_enabled": int(bool(config.use_lp_primal_start)),
+                "lp_warm_start_mode": int(config.lp_warm_start_mode),
+            }
+        )
 
         vars_build_start = perf_counter()
         # State expressions (equivalent elimination of v/o auxiliary variables).
@@ -714,6 +788,27 @@ def gurobi_reposition_policy(
         model.setObjective(objective, GRB.MAXIMIZE)
         objective_build_time_sec = float(perf_counter() - objective_build_start)
         model.update()
+
+        lp_warm_start_applied = 0
+        lp_warm_start_var_count = 0
+        lp_warm_start_nonzero_count = 0
+        lp_warm_start_note = ""
+        if bool(config.use_lp_primal_start):
+            try:
+                lp_warm_start_var_count, lp_warm_start_nonzero_count = _apply_zero_dispatch_lp_primal_start(
+                    x_vars=x_vars,
+                    y_vars=y_vars,
+                    r_vars=r_vars,
+                    b_vars=b_vars,
+                    mu_vars=mu_vars,
+                    served=served,
+                    full_stock=full_stock,
+                    station_full_batteries=station_full_batteries,
+                )
+                lp_warm_start_applied = int(lp_warm_start_var_count > 0)
+            except Exception as exc:
+                lp_warm_start_note = f"{type(exc).__name__}: {exc}"
+
         build_time_sec = float(perf_counter() - build_start)
         num_nz: int | None
         try:
@@ -730,6 +825,10 @@ def gurobi_reposition_policy(
                 "num_vars": int(model.NumVars),
                 "num_constrs": int(model.NumConstrs),
                 "num_nz": num_nz,
+                "lp_warm_start_applied": int(lp_warm_start_applied),
+                "lp_warm_start_var_count": int(lp_warm_start_var_count),
+                "lp_warm_start_nonzero_count": int(lp_warm_start_nonzero_count),
+                "lp_warm_start_note": lp_warm_start_note,
                 "use_preaggregation": int(use_preaggregation),
                 "use_aux_elimination": int(use_aux_elimination),
                 "x_var_count": len(x_vars),
@@ -751,8 +850,35 @@ def gurobi_reposition_policy(
 
         status_code = int(model.Status)
         sol_count = int(model.SolCount)
+        iter_count: float | None
+        bar_iter_count: int | None
+        obj_val: float | None
+        obj_bound: float | None
+        try:
+            iter_count = float(model.IterCount)
+        except Exception:
+            iter_count = None
+        try:
+            bar_iter_count = int(model.BarIterCount)
+        except Exception:
+            bar_iter_count = None
+        try:
+            obj_bound = float(model.ObjBound)
+        except Exception:
+            obj_bound = None
+        if sol_count > 0:
+            try:
+                obj_val = float(model.ObjVal)
+            except Exception:
+                obj_val = None
+        else:
+            obj_val = None
         trace_extra["optimize_time_sec"] = optimize_time_sec
         trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
+        trace_extra["iter_count"] = iter_count
+        trace_extra["bar_iter_count"] = bar_iter_count
+        trace_extra["obj_val"] = obj_val
+        trace_extra["obj_bound"] = obj_bound
         _update_reposition_trace(
             t_start=t_start,
             status=status_code,
@@ -862,6 +988,20 @@ def gurobi_reposition_policy(
                 "num_vars": _LAST_GUROBI_REPOSITION_TRACE.get("num_vars"),  # type: ignore[dict-item]
                 "num_constrs": _LAST_GUROBI_REPOSITION_TRACE.get("num_constrs"),  # type: ignore[dict-item]
                 "num_nz": _LAST_GUROBI_REPOSITION_TRACE.get("num_nz"),  # type: ignore[dict-item]
+                "iter_count": _LAST_GUROBI_REPOSITION_TRACE.get("iter_count"),  # type: ignore[dict-item]
+                "bar_iter_count": _LAST_GUROBI_REPOSITION_TRACE.get("bar_iter_count"),  # type: ignore[dict-item]
+                "obj_val": _LAST_GUROBI_REPOSITION_TRACE.get("obj_val"),  # type: ignore[dict-item]
+                "obj_bound": _LAST_GUROBI_REPOSITION_TRACE.get("obj_bound"),  # type: ignore[dict-item]
+                "solver_method": _LAST_GUROBI_REPOSITION_TRACE.get("solver_method"),  # type: ignore[dict-item]
+                "solver_crossover": _LAST_GUROBI_REPOSITION_TRACE.get("solver_crossover"),  # type: ignore[dict-item]
+                "numeric_focus": _LAST_GUROBI_REPOSITION_TRACE.get("numeric_focus"),  # type: ignore[dict-item]
+                "presolve": _LAST_GUROBI_REPOSITION_TRACE.get("presolve"),  # type: ignore[dict-item]
+                "lp_warm_start_enabled": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_enabled"),  # type: ignore[dict-item]
+                "lp_warm_start_mode": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_mode"),  # type: ignore[dict-item]
+                "lp_warm_start_applied": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_applied"),  # type: ignore[dict-item]
+                "lp_warm_start_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_var_count"),  # type: ignore[dict-item]
+                "lp_warm_start_nonzero_count": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_nonzero_count"),  # type: ignore[dict-item]
+                "lp_warm_start_note": _LAST_GUROBI_REPOSITION_TRACE.get("lp_warm_start_note"),  # type: ignore[dict-item]
                 "use_preaggregation": _LAST_GUROBI_REPOSITION_TRACE.get("use_preaggregation"),  # type: ignore[dict-item]
                 "use_aux_elimination": _LAST_GUROBI_REPOSITION_TRACE.get("use_aux_elimination"),  # type: ignore[dict-item]
                 "x_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("x_var_count"),  # type: ignore[dict-item]

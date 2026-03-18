@@ -5,6 +5,7 @@
 - 本轮 strict 参数扫（12 组：method/crossover/time_limit/numeric_focus）全部 `status=9, sol_count=0`，说明当前阻塞点不在这组参数组合，而在“首个 incumbent 可得性”。
 - 在 strict 下，随着 `time_limit` 从 10→15→20 秒，optimize 中位数近似线性增长（10.03→15.07→20.06s），而 build 基本稳定（约 10.9s）。
 - 新增 build 子阶段审计后，热点位于表达式聚合（约 43%）与变量构建（约 29%）；约束下发约 26%，候选集准备约 0.39s。
+- 已在代码中接入 strict 语义下的 `presolve + LP primal warm-start` 可调参数与迭代审计字段（`iter/bar_iter/obj_bound`），供下一线程直接做 incumbent 专项验证。
 - 本轮仅做等价重构/诊断增强/求解参数接口暴露，未改目标函数与核心约束语义，未启用 fallback 或缩 horizon。
 
 ## 证据表格（前后对比）

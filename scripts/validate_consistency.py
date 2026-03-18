@@ -164,6 +164,9 @@ def main() -> None:
         reposition_solver_method=cfg.model.reposition_solver_method,
         reposition_solver_crossover=cfg.model.reposition_solver_crossover,
         reposition_numeric_focus=cfg.model.reposition_numeric_focus,
+        reposition_presolve=cfg.model.reposition_presolve,
+        reposition_use_lp_primal_start=cfg.model.reposition_use_lp_primal_start,
+        reposition_lp_warm_start_mode=cfg.model.reposition_lp_warm_start_mode,
         reposition_eliminate_auxiliary_vars=cfg.model.reposition_eliminate_auxiliary_vars,
         reposition_preaggregate_transitions=cfg.model.reposition_preaggregate_transitions,
         charging_miss_penalty=cfg.model.charging_miss_penalty,
@@ -208,6 +211,14 @@ def main() -> None:
             low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
             transition_topk=cfg.model.reposition_transition_topk,
             time_limit_sec=cfg.model.solver_time_limit_sec,
+            solver_method=cfg.model.reposition_solver_method,
+            solver_crossover=cfg.model.reposition_solver_crossover,
+            numeric_focus=cfg.model.reposition_numeric_focus,
+            presolve=cfg.model.reposition_presolve,
+            use_lp_primal_start=cfg.model.reposition_use_lp_primal_start,
+            lp_warm_start_mode=cfg.model.reposition_lp_warm_start_mode,
+            eliminate_auxiliary_vars=cfg.model.reposition_eliminate_auxiliary_vars,
+            preaggregate_transitions=cfg.model.reposition_preaggregate_transitions,
         )
         if cfg.model.reposition_solver == "gurobi":
             X, Y = gurobi_reposition_policy(

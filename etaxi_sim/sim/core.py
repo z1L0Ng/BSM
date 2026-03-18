@@ -48,6 +48,9 @@ class Simulation:
     reposition_solver_method: int
     reposition_solver_crossover: int
     reposition_numeric_focus: int
+    reposition_presolve: int
+    reposition_use_lp_primal_start: bool
+    reposition_lp_warm_start_mode: int
     reposition_eliminate_auxiliary_vars: bool
     reposition_preaggregate_transitions: bool
     charging_miss_penalty: float
@@ -80,6 +83,9 @@ class Simulation:
             solver_method=self.reposition_solver_method,
             solver_crossover=self.reposition_solver_crossover,
             numeric_focus=self.reposition_numeric_focus,
+            presolve=self.reposition_presolve,
+            use_lp_primal_start=self.reposition_use_lp_primal_start,
+            lp_warm_start_mode=self.reposition_lp_warm_start_mode,
             eliminate_auxiliary_vars=self.reposition_eliminate_auxiliary_vars,
             preaggregate_transitions=self.reposition_preaggregate_transitions,
         )

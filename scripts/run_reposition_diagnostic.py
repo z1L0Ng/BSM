@@ -99,6 +99,24 @@ def main() -> None:
         default=None,
         help="override Gurobi NumericFocus for reposition model",
     )
+    parser.add_argument(
+        "--reposition-presolve",
+        type=int,
+        default=None,
+        help="override Gurobi Presolve for reposition model",
+    )
+    parser.add_argument(
+        "--reposition-use-lp-primal-start",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="toggle LP primal warm start construction for reposition model",
+    )
+    parser.add_argument(
+        "--reposition-lp-warm-start-mode",
+        type=int,
+        default=None,
+        help="override Gurobi LPWarmStart for reposition model",
+    )
     parser.add_argument("--inventory", type=int, default=None)
     parser.add_argument("--chargers", type=int, default=None)
     parser.add_argument("--swap-capacity", type=int, default=None)
@@ -238,6 +256,21 @@ def main() -> None:
             if args.reposition_numeric_focus is not None
             else cfg.model.reposition_numeric_focus
         ),
+        reposition_presolve=(
+            int(args.reposition_presolve)
+            if args.reposition_presolve is not None
+            else cfg.model.reposition_presolve
+        ),
+        reposition_use_lp_primal_start=(
+            bool(args.reposition_use_lp_primal_start)
+            if args.reposition_use_lp_primal_start is not None
+            else bool(cfg.model.reposition_use_lp_primal_start)
+        ),
+        reposition_lp_warm_start_mode=(
+            int(args.reposition_lp_warm_start_mode)
+            if args.reposition_lp_warm_start_mode is not None
+            else int(cfg.model.reposition_lp_warm_start_mode)
+        ),
         reposition_eliminate_auxiliary_vars=eliminate_auxiliary_vars,
         reposition_preaggregate_transitions=preaggregate_transitions,
         charging_miss_penalty=cfg.model.charging_miss_penalty,
@@ -290,6 +323,20 @@ def main() -> None:
             "reposition_num_vars": trace.get("num_vars"),
             "reposition_num_constrs": trace.get("num_constrs"),
             "reposition_num_nz": trace.get("num_nz"),
+            "reposition_iter_count": trace.get("iter_count"),
+            "reposition_bar_iter_count": trace.get("bar_iter_count"),
+            "reposition_obj_val": trace.get("obj_val"),
+            "reposition_obj_bound": trace.get("obj_bound"),
+            "reposition_solver_method": trace.get("solver_method"),
+            "reposition_solver_crossover": trace.get("solver_crossover"),
+            "reposition_numeric_focus": trace.get("numeric_focus"),
+            "reposition_presolve": trace.get("presolve"),
+            "reposition_lp_warm_start_enabled": trace.get("lp_warm_start_enabled"),
+            "reposition_lp_warm_start_mode": trace.get("lp_warm_start_mode"),
+            "reposition_lp_warm_start_applied": trace.get("lp_warm_start_applied"),
+            "reposition_lp_warm_start_var_count": trace.get("lp_warm_start_var_count"),
+            "reposition_lp_warm_start_nonzero_count": trace.get("lp_warm_start_nonzero_count"),
+            "reposition_lp_warm_start_note": trace.get("lp_warm_start_note"),
             "reposition_use_preaggregation": trace.get("use_preaggregation"),
             "reposition_use_aux_elimination": trace.get("use_aux_elimination"),
             "x_var_count": trace.get("x_var_count"),
@@ -341,6 +388,20 @@ def main() -> None:
         "reposition_num_vars",
         "reposition_num_constrs",
         "reposition_num_nz",
+        "reposition_iter_count",
+        "reposition_bar_iter_count",
+        "reposition_obj_val",
+        "reposition_obj_bound",
+        "reposition_solver_method",
+        "reposition_solver_crossover",
+        "reposition_numeric_focus",
+        "reposition_presolve",
+        "reposition_lp_warm_start_enabled",
+        "reposition_lp_warm_start_mode",
+        "reposition_lp_warm_start_applied",
+        "reposition_lp_warm_start_var_count",
+        "reposition_lp_warm_start_nonzero_count",
+        "reposition_lp_warm_start_note",
         "reposition_use_preaggregation",
         "reposition_use_aux_elimination",
         "x_var_count",
@@ -410,6 +471,21 @@ def main() -> None:
             args.reposition_numeric_focus
             if args.reposition_numeric_focus is not None
             else cfg.model.reposition_numeric_focus
+        ),
+        "reposition_presolve": int(
+            args.reposition_presolve
+            if args.reposition_presolve is not None
+            else cfg.model.reposition_presolve
+        ),
+        "reposition_use_lp_primal_start": bool(
+            args.reposition_use_lp_primal_start
+            if args.reposition_use_lp_primal_start is not None
+            else cfg.model.reposition_use_lp_primal_start
+        ),
+        "reposition_lp_warm_start_mode": int(
+            args.reposition_lp_warm_start_mode
+            if args.reposition_lp_warm_start_mode is not None
+            else cfg.model.reposition_lp_warm_start_mode
         ),
         "reposition_eliminate_auxiliary_vars": bool(eliminate_auxiliary_vars),
         "reposition_preaggregate_transitions": bool(preaggregate_transitions),

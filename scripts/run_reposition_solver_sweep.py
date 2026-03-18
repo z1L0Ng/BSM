@@ -19,6 +19,8 @@ class SweepParam:
     solver_crossover: int
     time_limit_sec: int
     numeric_focus: int
+    presolve: int
+    lp_warm_start_mode: int
 
 
 def _parse_int_list(value: str) -> list[int]:
@@ -45,17 +47,25 @@ def _build_sweep_plan(
     crossovers: list[int],
     time_limits: list[int],
     numeric_focuses: list[int],
+    presolves: list[int],
+    lp_warm_start_modes: list[int],
     max_combos: int,
 ) -> list[SweepParam]:
     preferred_method = 2 if 2 in methods else methods[0]
     alt_crossover = 1 if 1 in crossovers else crossovers[0]
     alt_numeric = 1 if 1 in numeric_focuses else numeric_focuses[0]
+    alt_presolve = 1 if 1 in presolves else (2 if 2 in presolves else presolves[0])
+    alt_lp_warm_mode = 1 if 1 in lp_warm_start_modes else (
+        0 if 0 in lp_warm_start_modes else lp_warm_start_modes[0]
+    )
 
     candidates: list[SweepParam] = []
 
     # Baseline rail: method x time with stable crossover=0, numeric=0.
     base_crossover = 0 if 0 in crossovers else crossovers[0]
     base_numeric = 0 if 0 in numeric_focuses else numeric_focuses[0]
+    base_presolve = -1 if -1 in presolves else presolves[0]
+    base_lp_mode = 2 if 2 in lp_warm_start_modes else lp_warm_start_modes[0]
     for method in methods:
         for tl in time_limits:
             candidates.append(
@@ -64,6 +74,8 @@ def _build_sweep_plan(
                     solver_crossover=int(base_crossover),
                     time_limit_sec=int(tl),
                     numeric_focus=int(base_numeric),
+                    presolve=int(base_presolve),
+                    lp_warm_start_mode=int(base_lp_mode),
                 )
             )
 
@@ -76,6 +88,8 @@ def _build_sweep_plan(
                     solver_crossover=int(alt_crossover),
                     time_limit_sec=int(tl),
                     numeric_focus=int(base_numeric),
+                    presolve=int(base_presolve),
+                    lp_warm_start_mode=int(base_lp_mode),
                 )
             )
 
@@ -88,6 +102,36 @@ def _build_sweep_plan(
                     solver_crossover=int(base_crossover),
                     time_limit_sec=int(tl),
                     numeric_focus=int(alt_numeric),
+                    presolve=int(base_presolve),
+                    lp_warm_start_mode=int(base_lp_mode),
+                )
+            )
+
+    # Sensitivity rail C: presolve impact on preferred method.
+    if alt_presolve != base_presolve:
+        for tl in time_limits:
+            candidates.append(
+                SweepParam(
+                    solver_method=int(preferred_method),
+                    solver_crossover=int(base_crossover),
+                    time_limit_sec=int(tl),
+                    numeric_focus=int(base_numeric),
+                    presolve=int(alt_presolve),
+                    lp_warm_start_mode=int(base_lp_mode),
+                )
+            )
+
+    # Sensitivity rail D: LPWarmStart impact on preferred method.
+    if alt_lp_warm_mode != base_lp_mode:
+        for tl in time_limits:
+            candidates.append(
+                SweepParam(
+                    solver_method=int(preferred_method),
+                    solver_crossover=int(base_crossover),
+                    time_limit_sec=int(tl),
+                    numeric_focus=int(base_numeric),
+                    presolve=int(base_presolve),
+                    lp_warm_start_mode=int(alt_lp_warm_mode),
                 )
             )
 
@@ -153,6 +197,13 @@ def main() -> None:
     parser.add_argument("--crossovers", default="0,1")
     parser.add_argument("--time-limits", default="10,15,20")
     parser.add_argument("--numeric-focuses", default="0,1")
+    parser.add_argument("--presolves", default="-1,1")
+    parser.add_argument("--lp-warm-start-modes", default="2,1")
+    parser.add_argument(
+        "--reposition-use-lp-primal-start",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+    )
     parser.add_argument("--max-combos", type=int, default=12)
     args = parser.parse_args()
 
@@ -163,11 +214,15 @@ def main() -> None:
     crossovers = _parse_int_list(args.crossovers)
     time_limits = _parse_int_list(args.time_limits)
     numeric_focuses = _parse_int_list(args.numeric_focuses)
+    presolves = _parse_int_list(args.presolves)
+    lp_warm_start_modes = _parse_int_list(args.lp_warm_start_modes)
     plan = _build_sweep_plan(
         methods=methods,
         crossovers=crossovers,
         time_limits=time_limits,
         numeric_focuses=numeric_focuses,
+        presolves=presolves,
+        lp_warm_start_modes=lp_warm_start_modes,
         max_combos=int(args.max_combos),
     )
     if not plan:
@@ -214,7 +269,15 @@ def main() -> None:
             str(int(param.solver_crossover)),
             "--reposition-numeric-focus",
             str(int(param.numeric_focus)),
+            "--reposition-presolve",
+            str(int(param.presolve)),
+            "--reposition-lp-warm-start-mode",
+            str(int(param.lp_warm_start_mode)),
         ]
+        if bool(args.reposition_use_lp_primal_start):
+            cmd.append("--reposition-use-lp-primal-start")
+        else:
+            cmd.append("--no-reposition-use-lp-primal-start")
         completed = subprocess.run(
             cmd,
             cwd=str(ROOT),
@@ -239,6 +302,9 @@ def main() -> None:
             "solver_crossover": int(param.solver_crossover),
             "time_limit_sec": int(param.time_limit_sec),
             "numeric_focus": int(param.numeric_focus),
+            "presolve": int(param.presolve),
+            "lp_warm_start_mode": int(param.lp_warm_start_mode),
+            "use_lp_primal_start": int(bool(args.reposition_use_lp_primal_start)),
             "process_return_code": int(completed.returncode),
             "sol_count": sol_count,
             "status": status,
@@ -247,6 +313,12 @@ def main() -> None:
             "run_wall_time_sec": _safe_float(str(summary_payload.get("run_wall_time_sec"))),
             "step_build_time_sec": _safe_float(diag_row.get("reposition_build_time_sec")),
             "step_optimize_time_sec": _safe_float(diag_row.get("reposition_optimize_time_sec")),
+            "iter_count": _safe_float(diag_row.get("reposition_iter_count")),
+            "bar_iter_count": _safe_int(diag_row.get("reposition_bar_iter_count")),
+            "obj_val": _safe_float(diag_row.get("reposition_obj_val")),
+            "obj_bound": _safe_float(diag_row.get("reposition_obj_bound")),
+            "lp_warm_start_applied": _safe_int(diag_row.get("reposition_lp_warm_start_applied")),
+            "lp_warm_start_var_count": _safe_int(diag_row.get("reposition_lp_warm_start_var_count")),
             "num_vars": _safe_int(diag_row.get("reposition_num_vars")),
             "num_constrs": _safe_int(diag_row.get("reposition_num_constrs")),
             "num_nz": _safe_int(diag_row.get("reposition_num_nz")),
@@ -260,6 +332,7 @@ def main() -> None:
         print(
             f"[{param_id}] method={param.solver_method} crossover={param.solver_crossover} "
             f"tl={param.time_limit_sec} nf={param.numeric_focus} "
+            f"presolve={param.presolve} lpws={param.lp_warm_start_mode} "
             f"sol={sol_count} status={status} wall={row['run_wall_time_sec']}"
         )
 
@@ -282,6 +355,9 @@ def main() -> None:
         "solver_crossover",
         "time_limit_sec",
         "numeric_focus",
+        "presolve",
+        "lp_warm_start_mode",
+        "use_lp_primal_start",
         "process_return_code",
         "sol_count",
         "status",
@@ -290,6 +366,12 @@ def main() -> None:
         "run_wall_time_sec",
         "step_build_time_sec",
         "step_optimize_time_sec",
+        "iter_count",
+        "bar_iter_count",
+        "obj_val",
+        "obj_bound",
+        "lp_warm_start_applied",
+        "lp_warm_start_var_count",
         "num_vars",
         "num_constrs",
         "num_nz",
@@ -321,6 +403,7 @@ def main() -> None:
             "reposition_solver": "gurobi",
             "charging_solver": "fcfs",
             "strict_mode": True,
+            "use_lp_primal_start": bool(args.reposition_use_lp_primal_start),
         },
         "max_steps": int(args.max_steps),
         "max_run_seconds_per_run": float(args.max_run_seconds_per_run),
@@ -336,6 +419,8 @@ def main() -> None:
             "solver_crossover": best.get("solver_crossover"),
             "time_limit_sec": best.get("time_limit_sec"),
             "numeric_focus": best.get("numeric_focus"),
+            "presolve": best.get("presolve"),
+            "lp_warm_start_mode": best.get("lp_warm_start_mode"),
             "sol_count": best.get("sol_count"),
             "status": best.get("status"),
             "run_wall_time_sec": best.get("run_wall_time_sec"),

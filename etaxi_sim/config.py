@@ -63,6 +63,9 @@ class ModelConfig:
     reposition_solver_method: int = 2
     reposition_solver_crossover: int = 0
     reposition_numeric_focus: int = 0
+    reposition_presolve: int = -1
+    reposition_use_lp_primal_start: bool = True
+    reposition_lp_warm_start_mode: int = 2
     reposition_eliminate_auxiliary_vars: bool = True
     reposition_preaggregate_transitions: bool = True
     transition_pickup_floor: float = 0.05
