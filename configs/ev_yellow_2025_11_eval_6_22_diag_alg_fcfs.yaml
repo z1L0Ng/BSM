@@ -1,0 +1,49 @@
+paths:
+  data_root: ../data
+  raw_dir: ../data/raw
+
+data:
+  source: yellow_tripdata
+  yellow_tripdata_path: ../data/raw/yellow_tripdata_2025-11.parquet
+  taxi_zone_lookup_path: ../data/raw/taxi_zone_lookup.csv
+  taxi_zones_shp_path: ../data/raw/taxi_zones/taxi_zones.shp
+
+sim:
+  seed: 42
+  time_bin_minutes: 15
+  horizon: 64
+  sim_date: "2025-11-01"
+  sim_start_hour: 6
+  sim_end_hour: 22
+  battery_levels: 100
+  charge_rate_levels_per_slot: 5
+  swap_deadline_horizon: 20
+  swap_low_energy_threshold: 20
+  min_full_batteries_per_station: 5
+  initial_vehicles: 1000
+  initial_vehicles_mode: from_data_peak_overlap
+  initial_vehicles_scale: 1.0
+  base_load_kw: 20.0
+  charge_power_kw: 30.0
+
+station:
+  swapping_capacity: 6
+  chargers: 5
+
+model:
+  transition_mode: historical_tripdata
+  distance_mode: taxi_zones
+  max_reachable_distance: 6.0
+  reposition_solver: gurobi
+  reposition_planning_horizon_slots: 4
+  charging_solver: fcfs
+  reposition_idle_cost_weight: 0.05
+  reposition_top_demand_targets: 6
+  reposition_top_swap_targets: 3
+  reposition_low_energy_swap_bonus: 0.2
+  reposition_transition_topk: 6
+  transition_pickup_floor: 0.1
+  transition_pickup_ceiling: 0.9
+  transition_pickup_smoothing_window: 4
+  charging_miss_penalty: 1000.0
+  solver_time_limit_sec: 2.0
