@@ -45,6 +45,8 @@ class Simulation:
     reposition_top_swap_targets: int
     reposition_low_energy_swap_bonus: float
     reposition_transition_topk: int
+    reposition_eliminate_auxiliary_vars: bool
+    reposition_preaggregate_transitions: bool
     charging_miss_penalty: float
     solver_time_limit_sec: float
     metrics: MetricsRecorder
@@ -72,6 +74,8 @@ class Simulation:
             low_energy_swap_bonus=self.reposition_low_energy_swap_bonus,
             transition_topk=self.reposition_transition_topk,
             time_limit_sec=self.solver_time_limit_sec,
+            eliminate_auxiliary_vars=self.reposition_eliminate_auxiliary_vars,
+            preaggregate_transitions=self.reposition_preaggregate_transitions,
         )
         if self.reposition_solver == "gurobi":
             X, Y = gurobi_reposition_policy(

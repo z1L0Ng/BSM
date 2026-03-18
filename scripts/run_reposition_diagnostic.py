@@ -6,6 +6,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
+from time import perf_counter
 
 import numpy as np
 
@@ -64,7 +65,37 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="configs/ev_yellow_2025_11.yaml")
     parser.add_argument("--output-csv", default="results/diagnostics/reposition_trace.csv")
+    parser.add_argument("--output-summary-json", default="")
     parser.add_argument("--max-steps", type=int, default=0, help="0 means full horizon")
+    parser.add_argument(
+        "--max-run-seconds",
+        type=float,
+        default=0.0,
+        help="hard stop for total diagnostic wall time; 0 means unlimited",
+    )
+    parser.add_argument("--reposition-solver", default=None)
+    parser.add_argument("--charging-solver", default=None)
+    parser.add_argument(
+        "--solver-time-limit-sec",
+        type=float,
+        default=None,
+        help="override solver time limit for reposition/charging models",
+    )
+    parser.add_argument("--inventory", type=int, default=None)
+    parser.add_argument("--chargers", type=int, default=None)
+    parser.add_argument("--swap-capacity", type=int, default=None)
+    parser.add_argument(
+        "--legacy-dense",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="disable auxiliary-variable elimination for before/after comparison",
+    )
+    parser.add_argument(
+        "--disable-preaggregation",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="disable transition/service preaggregation for before baseline",
+    )
     parser.add_argument(
         "--continue-on-error",
         action=argparse.BooleanOptionalAction,
@@ -137,13 +168,23 @@ def main() -> None:
     stations = build_stations(
         m=m,
         levels=cfg.sim.battery_levels,
-        swapping_capacity=cfg.station.swapping_capacity,
-        chargers=cfg.station.chargers,
-        full_batteries=cfg.sim.min_full_batteries_per_station,
+        swapping_capacity=int(args.swap_capacity if args.swap_capacity is not None else cfg.station.swapping_capacity),
+        chargers=int(args.chargers if args.chargers is not None else cfg.station.chargers),
+        full_batteries=int(
+            args.inventory if args.inventory is not None else cfg.sim.min_full_batteries_per_station
+        ),
         base_load_kw=cfg.sim.base_load_kw,
     )
 
     metrics = MetricsRecorder()
+    reposition_solver = str(args.reposition_solver or cfg.model.reposition_solver)
+    charging_solver = str(args.charging_solver or cfg.model.charging_solver)
+    eliminate_auxiliary_vars = (
+        False if args.legacy_dense else bool(cfg.model.reposition_eliminate_auxiliary_vars)
+    )
+    preaggregate_transitions = (
+        False if args.disable_preaggregation else bool(cfg.model.reposition_preaggregate_transitions)
+    )
     sim = Simulation(
         fleet=fleet,
         stations=stations,
@@ -156,16 +197,22 @@ def main() -> None:
         charge_rate_levels_per_slot=cfg.sim.charge_rate_levels_per_slot,
         deadline_horizon=cfg.sim.swap_deadline_horizon,
         charge_power_kw=cfg.sim.charge_power_kw,
-        reposition_solver=cfg.model.reposition_solver,
+        reposition_solver=reposition_solver,
         reposition_planning_horizon_slots=cfg.model.reposition_planning_horizon_slots,
-        charging_solver=cfg.model.charging_solver,
+        charging_solver=charging_solver,
         reposition_idle_cost_weight=cfg.model.reposition_idle_cost_weight,
         reposition_top_demand_targets=cfg.model.reposition_top_demand_targets,
         reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
         reposition_low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
         reposition_transition_topk=cfg.model.reposition_transition_topk,
+        reposition_eliminate_auxiliary_vars=eliminate_auxiliary_vars,
+        reposition_preaggregate_transitions=preaggregate_transitions,
         charging_miss_penalty=cfg.model.charging_miss_penalty,
-        solver_time_limit_sec=cfg.model.solver_time_limit_sec,
+        solver_time_limit_sec=(
+            float(args.solver_time_limit_sec)
+            if args.solver_time_limit_sec is not None
+            else cfg.model.solver_time_limit_sec
+        ),
         metrics=metrics,
         charging_tasks=[],
         waiting_queue=np.zeros((m, cfg.sim.battery_levels + 1), dtype=int),
@@ -176,8 +223,13 @@ def main() -> None:
 
     limit = effective_horizon if args.max_steps <= 0 else min(effective_horizon, args.max_steps)
     rows: list[dict[str, int | float | str | None]] = []
+    run_start = perf_counter()
+    timed_out = False
 
     for t in range(limit):
+        if args.max_run_seconds > 0 and (perf_counter() - run_start) >= float(args.max_run_seconds):
+            timed_out = True
+            break
         err: str | None = None
         try:
             sim.step(t, demand_data.demand[t], cfg.sim.swap_low_energy_threshold)
@@ -192,8 +244,33 @@ def main() -> None:
             "reposition_status": trace.get("status"),
             "reposition_sol_count": trace.get("sol_count"),
             "reposition_runtime_sec": trace.get("runtime_sec"),
+            "reposition_build_time_sec": trace.get("build_time_sec"),
+            "reposition_optimize_time_sec": trace.get("optimize_time_sec"),
+            "reposition_wall_time_sec": trace.get("wall_time_sec"),
             "reposition_outcome": trace.get("outcome"),
             "reposition_note": trace.get("note"),
+            "reposition_num_vars": trace.get("num_vars"),
+            "reposition_num_constrs": trace.get("num_constrs"),
+            "reposition_num_nz": trace.get("num_nz"),
+            "reposition_use_preaggregation": trace.get("use_preaggregation"),
+            "reposition_use_aux_elimination": trace.get("use_aux_elimination"),
+            "x_var_count": trace.get("x_var_count"),
+            "y_var_count": trace.get("y_var_count"),
+            "v_var_count": trace.get("v_var_count"),
+            "o_var_count": trace.get("o_var_count"),
+            "r_var_count": trace.get("r_var_count"),
+            "b_var_count": trace.get("b_var_count"),
+            "mu_var_count": trace.get("mu_var_count"),
+            "served_var_count": trace.get("served_var_count"),
+            "full_stock_var_count": trace.get("full_stock_var_count"),
+            "vacant_split_constr_count": trace.get("vacant_split_constr_count"),
+            "b_def_constr_count": trace.get("b_def_constr_count"),
+            "mu_le_b_constr_count": trace.get("mu_le_b_constr_count"),
+            "swap_cap_constr_count": trace.get("swap_cap_constr_count"),
+            "full_dyn_constr_count": trace.get("full_dyn_constr_count"),
+            "served_by_supply_constr_count": trace.get("served_by_supply_constr_count"),
+            "o_dyn_constr_count": trace.get("o_dyn_constr_count"),
+            "v_dyn_constr_count": trace.get("v_dyn_constr_count"),
             "error": err,
             "swap_requests": None if step is None else int(step["swap_requests"]),
             "successful_swaps": None if step is None else int(step["number_of_swaps"]),
@@ -213,8 +290,33 @@ def main() -> None:
         "reposition_status",
         "reposition_sol_count",
         "reposition_runtime_sec",
+        "reposition_build_time_sec",
+        "reposition_optimize_time_sec",
+        "reposition_wall_time_sec",
         "reposition_outcome",
         "reposition_note",
+        "reposition_num_vars",
+        "reposition_num_constrs",
+        "reposition_num_nz",
+        "reposition_use_preaggregation",
+        "reposition_use_aux_elimination",
+        "x_var_count",
+        "y_var_count",
+        "v_var_count",
+        "o_var_count",
+        "r_var_count",
+        "b_var_count",
+        "mu_var_count",
+        "served_var_count",
+        "full_stock_var_count",
+        "vacant_split_constr_count",
+        "b_def_constr_count",
+        "mu_le_b_constr_count",
+        "swap_cap_constr_count",
+        "full_dyn_constr_count",
+        "served_by_supply_constr_count",
+        "o_dyn_constr_count",
+        "v_dyn_constr_count",
         "error",
         "swap_requests",
         "successful_swaps",
@@ -230,24 +332,53 @@ def main() -> None:
     outcome_counter = Counter(str(row["reposition_outcome"]) for row in rows)
     status_counter = Counter(str(row["reposition_status"]) for row in rows)
     failed_steps = [int(row["t"]) for row in rows if row["error"]]
+    run_wall_time_sec = float(perf_counter() - run_start)
+    summary_payload = {
+        "rows": len(rows),
+        "effective_horizon": int(effective_horizon),
+        "requested_limit": int(limit),
+        "executed_steps": len(rows),
+        "timed_out": bool(timed_out),
+        "max_run_seconds": float(args.max_run_seconds),
+        "run_wall_time_sec": run_wall_time_sec,
+        "reposition_solver": reposition_solver,
+        "charging_solver": charging_solver,
+        "inventory_per_station": int(
+            args.inventory if args.inventory is not None else cfg.sim.min_full_batteries_per_station
+        ),
+        "chargers_per_station": int(args.chargers if args.chargers is not None else cfg.station.chargers),
+        "swap_capacity_per_station": int(
+            args.swap_capacity if args.swap_capacity is not None else cfg.station.swapping_capacity
+        ),
+        "solver_time_limit_sec": float(
+            args.solver_time_limit_sec if args.solver_time_limit_sec is not None else cfg.model.solver_time_limit_sec
+        ),
+        "reposition_eliminate_auxiliary_vars": bool(eliminate_auxiliary_vars),
+        "reposition_preaggregate_transitions": bool(preaggregate_transitions),
+        "outcome_counts": dict(outcome_counter),
+        "status_counts": dict(status_counter),
+        "failed_steps": failed_steps,
+        "output_csv": str(output_path),
+        "metrics_summary": metrics.to_summary(),
+    }
+    summary_path = (
+        Path(args.output_summary_json)
+        if args.output_summary_json
+        else output_path.with_suffix(".summary.json")
+    )
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    with summary_path.open("w", encoding="utf-8") as f:
+        json.dump(summary_payload, f, ensure_ascii=False, indent=2)
 
     print(f"Diagnostic rows: {len(rows)}")
     print(f"Trace CSV: {output_path}")
+    print(f"Summary JSON path: {summary_path}")
     print("Outcome counts:", dict(outcome_counter))
     print("Status counts:", dict(status_counter))
     print("Failed steps:", failed_steps)
     print(
         "Summary JSON:",
-        json.dumps(
-            {
-                "rows": len(rows),
-                "outcome_counts": dict(outcome_counter),
-                "status_counts": dict(status_counter),
-                "failed_steps": failed_steps,
-                "output_csv": str(output_path),
-            },
-            ensure_ascii=False,
-        ),
+        json.dumps(summary_payload, ensure_ascii=False),
     )
 
 

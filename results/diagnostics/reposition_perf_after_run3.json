@@ -1,0 +1,28 @@
+{
+  "rows": 1,
+  "effective_horizon": 64,
+  "requested_limit": 1,
+  "executed_steps": 1,
+  "timed_out": false,
+  "max_run_seconds": 240.0,
+  "run_wall_time_sec": 21.984096833970398,
+  "reposition_solver": "gurobi",
+  "charging_solver": "fcfs",
+  "inventory_per_station": 5,
+  "chargers_per_station": 5,
+  "swap_capacity_per_station": 6,
+  "solver_time_limit_sec": 10.0,
+  "reposition_eliminate_auxiliary_vars": false,
+  "reposition_preaggregate_transitions": true,
+  "outcome_counts": {
+    "exception": 1
+  },
+  "status_counts": {
+    "9": 1
+  },
+  "failed_steps": [
+    0
+  ],
+  "output_csv": "results/diagnostics/reposition_perf_after_run3.csv",
+  "metrics_summary": {}
+}

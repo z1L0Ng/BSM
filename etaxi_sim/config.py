@@ -60,6 +60,8 @@ class ModelConfig:
     reposition_top_swap_targets: int = 4
     reposition_low_energy_swap_bonus: float = 0.15
     reposition_transition_topk: int = 6
+    reposition_eliminate_auxiliary_vars: bool = True
+    reposition_preaggregate_transitions: bool = True
     transition_pickup_floor: float = 0.05
     transition_pickup_ceiling: float = 0.95
     transition_pickup_smoothing_window: int = 4

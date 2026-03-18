@@ -1,0 +1,30 @@
+{
+  "before": {
+    "run_wall_time_sec_median": 81.22004516702145,
+    "build_time_sec_median": 70.28681329201208,
+    "optimize_time_sec_median": 10.036332833988126,
+    "num_vars_median": 894385,
+    "num_constrs_median": 325420,
+    "num_nz_median": 6220445,
+    "status": "9",
+    "sol_count": "0"
+  },
+  "after": {
+    "run_wall_time_sec_median": 21.984096833970398,
+    "build_time_sec_median": 11.04106745799072,
+    "optimize_time_sec_median": 10.042450000008103,
+    "num_vars_median": 894385,
+    "num_constrs_median": 325420,
+    "num_nz_median": 6220445,
+    "status": "9",
+    "sol_count": "0"
+  },
+  "delta": {
+    "run_wall_time_sec_median": -0.7293267100656968,
+    "build_time_sec_median": -0.8429140980951898,
+    "optimize_time_sec_median": 0.0006095021081066886,
+    "num_vars_median": 0.0,
+    "num_constrs_median": 0.0,
+    "num_nz_median": 0.0
+  }
+}

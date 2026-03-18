@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from time import perf_counter
 from typing import Dict, List, Tuple
 
 import numpy as np
@@ -17,14 +18,41 @@ except Exception:
     HAS_GUROBI = False
 
 _GUROBI_ENV = None
-_LAST_GUROBI_REPOSITION_TRACE = {
+
+_TRACE_DEFAULTS = {
     "t_start": -1,
     "status": None,
     "sol_count": None,
     "runtime_sec": None,
+    "build_time_sec": None,
+    "optimize_time_sec": None,
+    "wall_time_sec": None,
     "outcome": "unknown",
     "note": "",
+    "num_vars": None,
+    "num_constrs": None,
+    "num_nz": None,
+    "use_preaggregation": None,
+    "use_aux_elimination": None,
+    "x_var_count": 0,
+    "y_var_count": 0,
+    "v_var_count": 0,
+    "o_var_count": 0,
+    "r_var_count": 0,
+    "b_var_count": 0,
+    "mu_var_count": 0,
+    "served_var_count": 0,
+    "full_stock_var_count": 0,
+    "vacant_split_constr_count": 0,
+    "b_def_constr_count": 0,
+    "mu_le_b_constr_count": 0,
+    "swap_cap_constr_count": 0,
+    "full_dyn_constr_count": 0,
+    "served_by_supply_constr_count": 0,
+    "o_dyn_constr_count": 0,
+    "v_dyn_constr_count": 0,
 }
+_LAST_GUROBI_REPOSITION_TRACE = dict(_TRACE_DEFAULTS)
 _GUROBI_REPOSITION_OUTCOME_COUNTS: Dict[str, int] = {}
 _GUROBI_REPOSITION_STATUS_COUNTS: Dict[str, int] = {}
 
@@ -40,6 +68,12 @@ class RepositionPolicyConfig:
     low_energy_swap_bonus: float = 0.15
     transition_topk: int = 6
     time_limit_sec: float = 3.0
+    solver_method: int = 2
+    solver_crossover: int = 0
+    eliminate_auxiliary_vars: bool = True
+    preaggregate_transitions: bool = True
+    allow_no_incumbent_retry: bool = False
+    allow_gurobi_error_fallback: bool = False
 
 
 def _update_reposition_trace(
@@ -50,6 +84,7 @@ def _update_reposition_trace(
     runtime_sec: float | None,
     outcome: str,
     note: str = "",
+    extra: Dict[str, int | float | str | None] | None = None,
 ) -> None:
     _LAST_GUROBI_REPOSITION_TRACE["t_start"] = int(t_start)
     _LAST_GUROBI_REPOSITION_TRACE["status"] = None if status is None else int(status)
@@ -59,6 +94,8 @@ def _update_reposition_trace(
     )
     _LAST_GUROBI_REPOSITION_TRACE["outcome"] = str(outcome)
     _LAST_GUROBI_REPOSITION_TRACE["note"] = str(note)
+    if extra:
+        _LAST_GUROBI_REPOSITION_TRACE.update(extra)
     if outcome:
         _GUROBI_REPOSITION_OUTCOME_COUNTS[outcome] = _GUROBI_REPOSITION_OUTCOME_COUNTS.get(outcome, 0) + 1
     if status is not None:
@@ -71,14 +108,17 @@ def get_last_gurobi_reposition_trace() -> Dict[str, int | float | str | None]:
 
 
 def reset_gurobi_reposition_trace_stats() -> None:
-    _LAST_GUROBI_REPOSITION_TRACE["t_start"] = -1
-    _LAST_GUROBI_REPOSITION_TRACE["status"] = None
-    _LAST_GUROBI_REPOSITION_TRACE["sol_count"] = None
-    _LAST_GUROBI_REPOSITION_TRACE["runtime_sec"] = None
-    _LAST_GUROBI_REPOSITION_TRACE["outcome"] = "unknown"
-    _LAST_GUROBI_REPOSITION_TRACE["note"] = ""
+    _LAST_GUROBI_REPOSITION_TRACE.clear()
+    _LAST_GUROBI_REPOSITION_TRACE.update(_TRACE_DEFAULTS)
     _GUROBI_REPOSITION_OUTCOME_COUNTS.clear()
     _GUROBI_REPOSITION_STATUS_COUNTS.clear()
+
+
+def _trace_extra_defaults() -> Dict[str, int | float | str | None]:
+    base = dict(_TRACE_DEFAULTS)
+    for key in ("t_start", "status", "sol_count", "runtime_sec", "outcome", "note"):
+        base.pop(key, None)
+    return base
 
 
 def get_gurobi_reposition_trace_stats() -> Dict[str, Dict[str, int]]:
@@ -278,7 +318,11 @@ def gurobi_reposition_policy(
     config: RepositionPolicyConfig,
     _retry_stage: int = 0,
 ) -> tuple[np.ndarray, np.ndarray]:
+    wall_start = perf_counter()
+
     if not HAS_GUROBI:
+        extra = _trace_extra_defaults()
+        extra["wall_time_sec"] = float(perf_counter() - wall_start)
         _update_reposition_trace(
             t_start=t_start,
             status=None,
@@ -286,6 +330,7 @@ def gurobi_reposition_policy(
             runtime_sec=None,
             outcome="no_gurobi",
             note="gurobipy unavailable",
+            extra=extra,
         )
         if demand_window.ndim == 1:
             return greedy_same_zone_policy(fleet, demand_window, config)
@@ -300,8 +345,12 @@ def gurobi_reposition_policy(
     Y = np.zeros((m, m, levels_plus), dtype=int)
     H = int(max(1, min(config.planning_horizon_slots, demand_window.shape[0])))
     demand_window = demand_window[:H]
+    use_aux_elimination = bool(config.eliminate_auxiliary_vars)
+    use_preaggregation = bool(config.preaggregate_transitions)
 
     if fleet.vacant.sum() <= 0:
+        extra = _trace_extra_defaults()
+        extra["wall_time_sec"] = float(perf_counter() - wall_start)
         _update_reposition_trace(
             t_start=t_start,
             status=None,
@@ -309,6 +358,7 @@ def gurobi_reposition_policy(
             runtime_sec=None,
             outcome="skip_no_vacant",
             note="no vacant vehicles",
+            extra=extra,
         )
         return X, Y
 
@@ -318,44 +368,61 @@ def gurobi_reposition_policy(
     top_demand_by_k = [
         np.argsort(-demand_window[k])[: max(1, config.top_demand_targets)] for k in range(H)
     ]
+    demand_rank_by_k = [np.argsort(-demand_window[k]) for k in range(H)]
     swap_priority = np.argsort(-station_full_batteries)
+    feasible_by_state: Dict[Tuple[int, int], np.ndarray] = {}
+    feasible_set_by_state: Dict[Tuple[int, int], set[int]] = {}
+    swap_targets_by_state: Dict[Tuple[int, int], List[int]] = {}
+    for i in range(m):
+        reachable_targets = np.flatnonzero(reachability[i] == 0)
+        if reachable_targets.size == 0:
+            for l in range(levels_plus):
+                feasible_by_state[(i, l)] = np.empty(0, dtype=int)
+                feasible_set_by_state[(i, l)] = set()
+                swap_targets_by_state[(i, l)] = []
+            continue
+        energy_row = energy_consumption[i, reachable_targets]
+        for l in range(levels_plus):
+            feasible = reachable_targets[energy_row <= l]
+            feasible_by_state[(i, l)] = feasible
+            feasible_set = set(int(v_) for v_ in feasible.tolist())
+            feasible_set_by_state[(i, l)] = feasible_set
+            swap_targets = [int(j) for j in swap_priority if int(j) in feasible_set][: config.top_swap_targets]
+            if i in feasible_set and i not in swap_targets:
+                swap_targets = [i] + swap_targets
+                swap_targets = swap_targets[: config.top_swap_targets]
+            swap_targets_by_state[(i, l)] = swap_targets
 
     # Sparse transition support to keep MPC tractable.
     trans_k = max(1, min(config.transition_topk, m))
     trans_targets: Dict[Tuple[int, int], np.ndarray] = {}
+    incoming_prev_by_target: Dict[Tuple[int, int], List[int]] = {(k, i): [] for k in range(H) for i in range(m)}
     for k in range(H):
         t_idx = min(t_start + k, transition.P.shape[0] - 1)
         for i_prev in range(m):
             row = transition.P[t_idx, i_prev] + transition.Q[t_idx, i_prev]
-            trans_targets[(k, i_prev)] = _topk_dests(row, trans_k)
+            targets = _topk_dests(row, trans_k)
+            trans_targets[(k, i_prev)] = targets
+            for i in targets:
+                incoming_prev_by_target[(k, int(i))].append(i_prev)
 
     try:
+        build_start = perf_counter()
+        trace_extra = _trace_extra_defaults()
+
         model = _build_model("fleet_reposition_mpc_vo")
         model.Params.OutputFlag = 0
         model.Params.TimeLimit = config.time_limit_sec
+        model.Params.Method = int(config.solver_method)
+        model.Params.Crossover = int(config.solver_crossover)
 
-        # States
-        v: Dict[Tuple[int, int, int], gp.Var] = {}
-        o: Dict[Tuple[int, int, int], gp.Var] = {}
-        for k in range(H + 1):
-            for i in range(m):
-                for l in range(levels_plus):
-                    if k == 0:
-                        v[(k, i, l)] = model.addVar(
-                            vtype=GRB.CONTINUOUS,
-                            lb=float(fleet.vacant[i, l]),
-                            ub=float(fleet.vacant[i, l]),
-                            name=f"v_{k}_{i}_{l}",
-                        )
-                        o[(k, i, l)] = model.addVar(
-                            vtype=GRB.CONTINUOUS,
-                            lb=float(fleet.occupied[i, l]),
-                            ub=float(fleet.occupied[i, l]),
-                            name=f"o_{k}_{i}_{l}",
-                        )
-                    else:
-                        v[(k, i, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"v_{k}_{i}_{l}")
-                        o[(k, i, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"o_{k}_{i}_{l}")
+        # State expressions (equivalent elimination of v/o auxiliary variables).
+        v_state: Dict[Tuple[int, int, int], gp.LinExpr | float] = {}
+        o_state: Dict[Tuple[int, int, int], gp.LinExpr | float] = {}
+        for i in range(m):
+            for l in range(levels_plus):
+                v_state[(0, i, l)] = float(fleet.vacant[i, l])
+                o_state[(0, i, l)] = float(fleet.occupied[i, l])
 
         # Dispatch/processing variables
         x_vars: Dict[Tuple[int, int, int, int], gp.Var] = {}
@@ -366,36 +433,39 @@ def gurobi_reposition_policy(
 
         outbound: Dict[Tuple[int, int, int], List[gp.Var]] = {}
         service_inbound: Dict[Tuple[int, int], List[gp.Var]] = {}
+        service_state_inbound: Dict[Tuple[int, int, int], List[gp.Var]] = {}
         swap_inbound: Dict[Tuple[int, int, int], List[gp.Var]] = {}
         low_energy_y: List[gp.Var] = []
         move_cost_terms: List[gp.LinExpr] = []
 
         for k in range(H):
             top_demand = top_demand_by_k[k]
+            demand_rank = demand_rank_by_k[k]
             for i, l in all_states:
                 state_key = (k, i, l)
                 state_out: List[gp.Var] = []
-                r_vars[state_key] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"r_{k}_{i}_{l}")
-                state_out.append(r_vars[state_key])
+                if not use_aux_elimination:
+                    r_vars[state_key] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"r_{k}_{i}_{l}")
+                    state_out.append(r_vars[state_key])
                 outbound[state_key] = state_out
 
-                feasible = np.where((reachability[i] == 0) & (energy_consumption[i] <= l))[0]
+                feasible = feasible_by_state[(i, l)]
                 if feasible.size == 0:
                     continue
-                feasible_set = set(int(v_) for v_ in feasible.tolist())
+                feasible_set = feasible_set_by_state[(i, l)]
 
                 service_targets = [int(j) for j in top_demand if int(j) in feasible_set]
                 if i in feasible_set and i not in service_targets:
                     service_targets.append(i)
                 if len(service_targets) < config.top_demand_targets:
-                    remain = [int(j) for j in feasible if int(j) not in service_targets]
-                    remain.sort(key=lambda z: float(demand_window[k, z]), reverse=True)
-                    service_targets.extend(remain[: config.top_demand_targets - len(service_targets)])
+                    for j in demand_rank:
+                        j_idx = int(j)
+                        if j_idx in feasible_set and j_idx not in service_targets:
+                            service_targets.append(j_idx)
+                            if len(service_targets) >= config.top_demand_targets:
+                                break
 
-                swap_targets = [int(j) for j in swap_priority if int(j) in feasible_set][: config.top_swap_targets]
-                if i in feasible_set and i not in swap_targets:
-                    swap_targets = [i] + swap_targets
-                    swap_targets = swap_targets[: config.top_swap_targets]
+                swap_targets = swap_targets_by_state[(i, l)]
 
                 if l > config.swap_low_energy_threshold:
                     for j in service_targets:
@@ -406,6 +476,7 @@ def gurobi_reposition_policy(
                         x_vars[key] = var
                         state_out.append(var)
                         service_inbound.setdefault((k, j), []).append(var)
+                        service_state_inbound.setdefault((k, j, l), []).append(var)
                         move_cost_terms.append(float(energy_consumption[i, j]) * var)
 
                 for j in swap_targets:
@@ -421,6 +492,15 @@ def gurobi_reposition_policy(
                         low_energy_y.append(var)
 
         if not x_vars and not y_vars:
+            trace_extra.update(
+                {
+                    "build_time_sec": float(perf_counter() - build_start),
+                    "wall_time_sec": float(perf_counter() - wall_start),
+                    "v_var_count": 0,
+                    "o_var_count": 0,
+                    "r_var_count": len(r_vars),
+                }
+            )
             _update_reposition_trace(
                 t_start=t_start,
                 status=None,
@@ -428,6 +508,7 @@ def gurobi_reposition_policy(
                 runtime_sec=None,
                 outcome="skip_no_candidates",
                 note="no feasible dispatch vars",
+                extra=trace_extra,
             )
             return X, Y
 
@@ -448,7 +529,8 @@ def gurobi_reposition_policy(
         for k in range(H):
             for j in range(m):
                 for l in range(levels_plus):
-                    b_vars[(k, j, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"b_{k}_{j}_{l}")
+                    if not use_aux_elimination:
+                        b_vars[(k, j, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"b_{k}_{j}_{l}")
                     mu_vars[(k, j, l)] = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"mu_{k}_{j}_{l}")
 
         served = {
@@ -462,89 +544,149 @@ def gurobi_reposition_policy(
             for j in range(m)
         }
 
-        # Dispatch feasibility from vacant states.
-        for k in range(H):
-            for i in range(m):
-                for l in range(levels_plus):
-                    vars_ = outbound.get((k, i, l), [])
-                    model.addConstr(gp.quicksum(vars_) == v[(k, i, l)], name=f"vacant_split_{k}_{i}_{l}")
+        # Pre-aggregate service flow by destination and level to avoid rebuilding
+        # identical quicksum expressions in every transition constraint.
+        service_state_expr: Dict[Tuple[int, int, int], gp.LinExpr] = {}
+        if use_preaggregation:
+            service_state_expr = {
+                key: gp.quicksum(vars_) for key, vars_ in service_state_inbound.items()
+            }
+        swap_inbound_expr: Dict[Tuple[int, int, int], gp.LinExpr] = {
+            key: gp.quicksum(vars_) for key, vars_ in swap_inbound.items()
+        }
+        outbound_expr: Dict[Tuple[int, int, int], gp.LinExpr] = {
+            key: gp.quicksum(vars_) for key, vars_ in outbound.items()
+        }
 
-        # Swap equations and stock dynamics.
-        for k in range(H):
-            for j in range(m):
-                for l in range(levels_plus):
-                    model.addConstr(
-                        b_vars[(k, j, l)] == gp.quicksum(swap_inbound.get((k, j, l), [])),
-                        name=f"b_def_{k}_{j}_{l}",
-                    )
-                    model.addConstr(mu_vars[(k, j, l)] <= b_vars[(k, j, l)], name=f"mu_le_b_{k}_{j}_{l}")
+        constr_counts: Dict[str, int] = {
+            "vacant_split_constr_count": 0,
+            "b_def_constr_count": 0,
+            "mu_le_b_constr_count": 0,
+            "swap_cap_constr_count": 0,
+            "full_dyn_constr_count": 0,
+            "served_by_supply_constr_count": 0,
+            "o_dyn_constr_count": 0,
+            "v_dyn_constr_count": 0,
+        }
 
-                model.addConstr(
-                    gp.quicksum(mu_vars[(k, j, l)] for l in range(levels_plus)) <= float(station_swapping_capacity[j]),
-                    name=f"swap_machine_cap_{k}_{j}",
-                )
-                model.addConstr(
-                    gp.quicksum(mu_vars[(k, j, l)] for l in range(levels_plus)) <= full_stock[(k, j)],
-                    name=f"swap_full_cap_{k}_{j}",
-                )
-                model.addConstr(
-                    full_stock[(k + 1, j)]
-                    == full_stock[(k, j)] - gp.quicksum(mu_vars[(k, j, l)] for l in range(levels_plus)),
-                    name=f"full_dyn_{k}_{j}",
-                )
-
-                model.addConstr(
-                    served[(k, j)] <= gp.quicksum(service_inbound.get((k, j), [])),
-                    name=f"served_by_supply_{k}_{j}",
-                )
-
-        # Expected V/O transitions over horizon.
+        # Recursively build expected state expressions over the full horizon.
         for k in range(H):
             t_idx = min(t_start + k, transition.P.shape[0] - 1)
+            next_v_state: Dict[Tuple[int, int], gp.LinExpr] = {}
+            next_o_state: Dict[Tuple[int, int], gp.LinExpr] = {}
             for i in range(m):
                 for l in range(levels_plus):
                     o_terms: List[gp.LinExpr] = []
-                    v_terms: List[gp.LinExpr] = []
-
-                    # Keep undispatched vacant vehicles at the same state.
-                    v_terms.append(r_vars[(k, i, l)])
-
-                    # Align MPC with simulator semantics: only successful swaps
-                    # and direct full-battery arrivals re-enter dispatchable vacant pool.
+                    if use_aux_elimination:
+                        v_terms: List[gp.LinExpr] = [v_state[(k, i, l)] - outbound_expr[(k, i, l)]]
+                    else:
+                        v_terms = [r_vars[(k, i, l)]]
                     if l == levels:
+                        full_arrivals_expr: gp.LinExpr | float
+                        if use_aux_elimination:
+                            full_arrivals_expr = swap_inbound_expr.get((k, i, levels), 0.0)
+                        else:
+                            full_arrivals_expr = b_vars[(k, i, levels)]
                         v_terms.append(
                             gp.quicksum(mu_vars[(k, i, ll)] for ll in range(levels_plus))
-                            + b_vars[(k, i, levels)]
+                            + full_arrivals_expr
                         )
-
-                    for i_prev in range(m):
-                        if i not in trans_targets[(k, i_prev)]:
+                    if use_preaggregation:
+                        prev_candidates = incoming_prev_by_target[(k, i)]
+                    else:
+                        prev_candidates = range(m)
+                    for i_prev in prev_candidates:
+                        if not use_preaggregation and i not in trans_targets[(k, i_prev)]:
                             continue
                         e = int(energy_consumption[i_prev, i])
                         l_prev = l + e
                         if l_prev > levels:
                             continue
-
-                        s_prev = gp.quicksum(
-                            x_vars.get((k, origin, i_prev, l_prev), 0.0) for origin in range(m)
-                        )
-
+                        if use_preaggregation:
+                            s_prev = service_state_expr.get((k, i_prev, l_prev), 0.0)
+                        else:
+                            s_prev = gp.quicksum(
+                                x_vars.get((k, origin, i_prev, l_prev), 0.0) for origin in range(m)
+                            )
                         ptil = float(transition.P_tilde[t_idx, i_prev, i])
                         qtil = float(transition.Q_tilde[t_idx, i_prev, i])
                         pocc = float(transition.P[t_idx, i_prev, i])
                         qocc = float(transition.Q[t_idx, i_prev, i])
-
                         if ptil != 0.0:
                             o_terms.append(ptil * s_prev)
                         if pocc != 0.0:
-                            o_terms.append(pocc * o[(k, i_prev, l_prev)])
+                            o_terms.append(pocc * o_state[(k, i_prev, l_prev)])
                         if qtil != 0.0:
                             v_terms.append(qtil * s_prev)
                         if qocc != 0.0:
-                            v_terms.append(qocc * o[(k, i_prev, l_prev)])
+                            v_terms.append(qocc * o_state[(k, i_prev, l_prev)])
+                    next_o_state[(i, l)] = gp.quicksum(o_terms)
+                    next_v_state[(i, l)] = gp.quicksum(v_terms)
+            for i in range(m):
+                for l in range(levels_plus):
+                    o_state[(k + 1, i, l)] = next_o_state[(i, l)]
+                    v_state[(k + 1, i, l)] = next_v_state[(i, l)]
 
-                    model.addConstr(o[(k + 1, i, l)] == gp.quicksum(o_terms), name=f"o_dyn_{k}_{i}_{l}")
-                    model.addConstr(v[(k + 1, i, l)] == gp.quicksum(v_terms), name=f"v_dyn_{k}_{i}_{l}")
+        # Dispatch feasibility from vacant states.
+        for k in range(H):
+            for i in range(m):
+                for l in range(levels_plus):
+                    if use_aux_elimination:
+                        model.addConstr(
+                            outbound_expr[(k, i, l)] <= v_state[(k, i, l)],
+                            name=f"vacant_split_{k}_{i}_{l}",
+                        )
+                    else:
+                        model.addConstr(
+                            outbound_expr[(k, i, l)] == v_state[(k, i, l)],
+                            name=f"vacant_split_{k}_{i}_{l}",
+                        )
+                    constr_counts["vacant_split_constr_count"] += 1
+
+        # Swap equations and stock dynamics.
+        for k in range(H):
+            for j in range(m):
+                for l in range(levels_plus):
+                    if use_aux_elimination:
+                        model.addConstr(
+                            mu_vars[(k, j, l)] <= swap_inbound_expr.get((k, j, l), 0.0),
+                            name=f"mu_le_b_{k}_{j}_{l}",
+                        )
+                    else:
+                        model.addConstr(
+                            b_vars[(k, j, l)] == swap_inbound_expr.get((k, j, l), 0.0),
+                            name=f"b_def_{k}_{j}_{l}",
+                        )
+                        constr_counts["b_def_constr_count"] += 1
+                        model.addConstr(
+                            mu_vars[(k, j, l)] <= b_vars[(k, j, l)],
+                            name=f"mu_le_b_{k}_{j}_{l}",
+                        )
+                    constr_counts["mu_le_b_constr_count"] += 1
+
+                mu_sum = gp.quicksum(mu_vars[(k, j, l)] for l in range(levels_plus))
+                model.addConstr(
+                    mu_sum <= float(station_swapping_capacity[j]),
+                    name=f"swap_machine_cap_{k}_{j}",
+                )
+                constr_counts["swap_cap_constr_count"] += 1
+                model.addConstr(
+                    mu_sum <= full_stock[(k, j)],
+                    name=f"swap_full_cap_{k}_{j}",
+                )
+                constr_counts["swap_cap_constr_count"] += 1
+                model.addConstr(
+                    full_stock[(k + 1, j)]
+                    == full_stock[(k, j)] - mu_sum,
+                    name=f"full_dyn_{k}_{j}",
+                )
+                constr_counts["full_dyn_constr_count"] += 1
+
+                model.addConstr(
+                    served[(k, j)] <= gp.quicksum(service_inbound.get((k, j), [])),
+                    name=f"served_by_supply_{k}_{j}",
+                )
+                constr_counts["served_by_supply_constr_count"] += 1
 
         objective = (
             config.service_reward
@@ -553,10 +695,42 @@ def gurobi_reposition_policy(
             + config.low_energy_swap_bonus * gp.quicksum(low_energy_y)
         )
         model.setObjective(objective, GRB.MAXIMIZE)
+        model.update()
+        build_time_sec = float(perf_counter() - build_start)
+        num_nz: int | None
+        try:
+            num_nz = int(model.NumNZs)
+        except Exception:
+            num_nz = None
+        trace_extra.update(
+            {
+                "build_time_sec": build_time_sec,
+                "num_vars": int(model.NumVars),
+                "num_constrs": int(model.NumConstrs),
+                "num_nz": num_nz,
+                "use_preaggregation": int(use_preaggregation),
+                "use_aux_elimination": int(use_aux_elimination),
+                "x_var_count": len(x_vars),
+                "y_var_count": len(y_vars),
+                "v_var_count": 0,
+                "o_var_count": 0,
+                "r_var_count": len(r_vars),
+                "b_var_count": len(b_vars),
+                "mu_var_count": len(mu_vars),
+                "served_var_count": len(served),
+                "full_stock_var_count": len(full_stock),
+            }
+        )
+        trace_extra.update(constr_counts)
+
+        optimize_start = perf_counter()
         model.optimize()
+        optimize_time_sec = float(perf_counter() - optimize_start)
 
         status_code = int(model.Status)
         sol_count = int(model.SolCount)
+        trace_extra["optimize_time_sec"] = optimize_time_sec
+        trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
         _update_reposition_trace(
             t_start=t_start,
             status=status_code,
@@ -564,53 +738,57 @@ def gurobi_reposition_policy(
             runtime_sec=float(model.Runtime),
             outcome="optimized" if sol_count > 0 else "no_incumbent",
             note="",
+            extra=trace_extra,
         )
 
         if model.SolCount <= 0:
-            if _retry_stage == 0 and H > 1:
-                _update_reposition_trace(
-                    t_start=t_start,
-                    status=status_code,
-                    sol_count=sol_count,
-                    runtime_sec=float(model.Runtime),
-                    outcome="retry_h1_no_incumbent",
-                    note=f"h={H}, tl={config.time_limit_sec}",
-                )
-                retry_cfg = replace(config, planning_horizon_slots=1)
-                return gurobi_reposition_policy(
-                    fleet=fleet,
-                    demand_window=demand_window[:1],
-                    reachability=reachability,
-                    energy_consumption=energy_consumption,
-                    station_full_batteries=station_full_batteries,
-                    station_swapping_capacity=station_swapping_capacity,
-                    transition=transition,
-                    t_start=t_start,
-                    config=retry_cfg,
-                    _retry_stage=1,
-                )
-            if _retry_stage <= 1 and float(config.time_limit_sec) < 20.0:
-                _update_reposition_trace(
-                    t_start=t_start,
-                    status=status_code,
-                    sol_count=sol_count,
-                    runtime_sec=float(model.Runtime),
-                    outcome="retry_t20_no_incumbent",
-                    note=f"h={H}, tl={config.time_limit_sec}",
-                )
-                retry_cfg = replace(config, planning_horizon_slots=1, time_limit_sec=20.0)
-                return gurobi_reposition_policy(
-                    fleet=fleet,
-                    demand_window=demand_window[:1],
-                    reachability=reachability,
-                    energy_consumption=energy_consumption,
-                    station_full_batteries=station_full_batteries,
-                    station_swapping_capacity=station_swapping_capacity,
-                    transition=transition,
-                    t_start=t_start,
-                    config=retry_cfg,
-                    _retry_stage=2,
-                )
+            if config.allow_no_incumbent_retry:
+                if _retry_stage == 0 and H > 1:
+                    _update_reposition_trace(
+                        t_start=t_start,
+                        status=status_code,
+                        sol_count=sol_count,
+                        runtime_sec=float(model.Runtime),
+                        outcome="retry_h1_no_incumbent",
+                        note=f"h={H}, tl={config.time_limit_sec}",
+                        extra=trace_extra,
+                    )
+                    retry_cfg = replace(config, planning_horizon_slots=1)
+                    return gurobi_reposition_policy(
+                        fleet=fleet,
+                        demand_window=demand_window[:1],
+                        reachability=reachability,
+                        energy_consumption=energy_consumption,
+                        station_full_batteries=station_full_batteries,
+                        station_swapping_capacity=station_swapping_capacity,
+                        transition=transition,
+                        t_start=t_start,
+                        config=retry_cfg,
+                        _retry_stage=1,
+                    )
+                if _retry_stage <= 1 and float(config.time_limit_sec) < 20.0:
+                    _update_reposition_trace(
+                        t_start=t_start,
+                        status=status_code,
+                        sol_count=sol_count,
+                        runtime_sec=float(model.Runtime),
+                        outcome="retry_t20_no_incumbent",
+                        note=f"h={H}, tl={config.time_limit_sec}",
+                        extra=trace_extra,
+                    )
+                    retry_cfg = replace(config, planning_horizon_slots=1, time_limit_sec=20.0)
+                    return gurobi_reposition_policy(
+                        fleet=fleet,
+                        demand_window=demand_window[:1],
+                        reachability=reachability,
+                        energy_consumption=energy_consumption,
+                        station_full_batteries=station_full_batteries,
+                        station_swapping_capacity=station_swapping_capacity,
+                        transition=transition,
+                        t_start=t_start,
+                        config=retry_cfg,
+                        _retry_stage=2,
+                    )
             raise RuntimeError(f"reposition model has no solution, status={model.Status}")
 
         x_stage: Dict[Tuple[int, int, int], float] = {}
@@ -628,17 +806,56 @@ def gurobi_reposition_policy(
 
         return _allocate_integer_dispatch(x_stage, y_stage, fleet.vacant)
     except gp.GurobiError as exc:
+        extra = _trace_extra_defaults()
+        extra["wall_time_sec"] = float(perf_counter() - wall_start)
+        outcome = "gurobi_error"
+        note = str(exc)
+        if config.allow_gurobi_error_fallback:
+            outcome = "fallback_greedy_gurobi_error"
         _update_reposition_trace(
             t_start=t_start,
             status=None,
             sol_count=None,
             runtime_sec=None,
-            outcome="fallback_greedy_gurobi_error",
-            note=str(exc),
+            outcome=outcome,
+            note=note,
+            extra=extra,
         )
-        return greedy_same_zone_policy(fleet, demand_window[0], config)
+        if config.allow_gurobi_error_fallback:
+            return greedy_same_zone_policy(fleet, demand_window[0], config)
+        raise RuntimeError(f"gurobi_reposition_policy failed: {exc}") from exc
     except Exception as exc:
         prev_note = _LAST_GUROBI_REPOSITION_TRACE.get("note", "")
+        extra = _trace_extra_defaults()
+        extra.update(
+            {
+                "build_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("build_time_sec"),  # type: ignore[dict-item]
+                "optimize_time_sec": _LAST_GUROBI_REPOSITION_TRACE.get("optimize_time_sec"),  # type: ignore[dict-item]
+                "wall_time_sec": float(perf_counter() - wall_start),
+                "num_vars": _LAST_GUROBI_REPOSITION_TRACE.get("num_vars"),  # type: ignore[dict-item]
+                "num_constrs": _LAST_GUROBI_REPOSITION_TRACE.get("num_constrs"),  # type: ignore[dict-item]
+                "num_nz": _LAST_GUROBI_REPOSITION_TRACE.get("num_nz"),  # type: ignore[dict-item]
+                "use_preaggregation": _LAST_GUROBI_REPOSITION_TRACE.get("use_preaggregation"),  # type: ignore[dict-item]
+                "use_aux_elimination": _LAST_GUROBI_REPOSITION_TRACE.get("use_aux_elimination"),  # type: ignore[dict-item]
+                "x_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("x_var_count"),  # type: ignore[dict-item]
+                "y_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("y_var_count"),  # type: ignore[dict-item]
+                "v_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("v_var_count"),  # type: ignore[dict-item]
+                "o_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("o_var_count"),  # type: ignore[dict-item]
+                "r_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("r_var_count"),  # type: ignore[dict-item]
+                "b_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("b_var_count"),  # type: ignore[dict-item]
+                "mu_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("mu_var_count"),  # type: ignore[dict-item]
+                "served_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("served_var_count"),  # type: ignore[dict-item]
+                "full_stock_var_count": _LAST_GUROBI_REPOSITION_TRACE.get("full_stock_var_count"),  # type: ignore[dict-item]
+                "vacant_split_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("vacant_split_constr_count"),  # type: ignore[dict-item]
+                "b_def_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("b_def_constr_count"),  # type: ignore[dict-item]
+                "mu_le_b_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("mu_le_b_constr_count"),  # type: ignore[dict-item]
+                "swap_cap_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("swap_cap_constr_count"),  # type: ignore[dict-item]
+                "full_dyn_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("full_dyn_constr_count"),  # type: ignore[dict-item]
+                "served_by_supply_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("served_by_supply_constr_count"),  # type: ignore[dict-item]
+                "o_dyn_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("o_dyn_constr_count"),  # type: ignore[dict-item]
+                "v_dyn_constr_count": _LAST_GUROBI_REPOSITION_TRACE.get("v_dyn_constr_count"),  # type: ignore[dict-item]
+            }
+        )
         _update_reposition_trace(
             t_start=t_start,
             status=_LAST_GUROBI_REPOSITION_TRACE.get("status"),  # type: ignore[arg-type]
@@ -646,5 +863,6 @@ def gurobi_reposition_policy(
             runtime_sec=_LAST_GUROBI_REPOSITION_TRACE.get("runtime_sec"),  # type: ignore[arg-type]
             outcome="exception",
             note=f"retry_stage={_retry_stage}; {prev_note}; {type(exc).__name__}: {exc}".strip("; "),
+            extra=extra,
         )
         raise RuntimeError(f"gurobi_reposition_policy failed: {exc}") from exc

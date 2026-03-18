@@ -225,6 +225,8 @@ def main() -> None:
         reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
         reposition_low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
         reposition_transition_topk=cfg.model.reposition_transition_topk,
+        reposition_eliminate_auxiliary_vars=cfg.model.reposition_eliminate_auxiliary_vars,
+        reposition_preaggregate_transitions=cfg.model.reposition_preaggregate_transitions,
         charging_miss_penalty=cfg.model.charging_miss_penalty,
         solver_time_limit_sec=cfg.model.solver_time_limit_sec,
         metrics=metrics,
