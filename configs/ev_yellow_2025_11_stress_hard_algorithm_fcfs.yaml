@@ -44,4 +44,4 @@ model:
   transition_pickup_ceiling: 0.9
   transition_pickup_smoothing_window: 4
   charging_miss_penalty: 1000.0
-  solver_time_limit_sec: 2.0
+  solver_time_limit_sec: 5.0

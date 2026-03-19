@@ -135,6 +135,7 @@ class Simulation:
         Y = (Y * enough_energy).astype(int, copy=False)
         move_counts = (X + Y).sum(axis=2)
         idle_driving_distance = float(np.sum(move_counts * self.energy_consumption))
+        cross_zone_dispatch = int(move_counts.sum() - np.trace(move_counts))
 
         dispatched = X.sum(axis=1) + Y.sum(axis=1)
         residual_vacant = self.fleet.vacant - dispatched
@@ -278,6 +279,7 @@ class Simulation:
             total_charging_demand_kw=total_charging_demand_kw,
             waiting_time_for_battery_slots=waiting_time_for_battery_slots,
             idle_driving_distance=idle_driving_distance,
+            cross_zone_dispatch=cross_zone_dispatch,
             waiting_vehicles=waiting_vehicles,
             waiting_vehicles_by_station=waiting_by_station,
         )

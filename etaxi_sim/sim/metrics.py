@@ -36,6 +36,7 @@ class MetricsRecorder:
         total_charging_demand_kw: float = 0.0,
         waiting_time_for_battery_slots: float = 0.0,
         idle_driving_distance: float | None = None,
+        cross_zone_dispatch: int = 0,
         waiting_vehicles: int = 0,
         waiting_vehicles_by_station: np.ndarray | None = None,
     ) -> None:
@@ -53,9 +54,8 @@ class MetricsRecorder:
         ratio_den = swap_requests if swap_requests > 0 else swap_arrivals
         swap_success_ratio = float(successful_swaps / ratio_den) if ratio_den > 0 else 0.0
         deadline_miss_ratio = float(deadline_misses / ratio_den) if ratio_den > 0 else 0.0
-        charge_ratio_den = successful_swaps if successful_swaps > 0 else ratio_den
         charging_deadline_miss_ratio = (
-            float(charging_deadline_misses / charge_ratio_den) if charge_ratio_den > 0 else 0.0
+            float(charging_deadline_misses / charging_demand) if charging_demand > 0 else 0.0
         )
 
         self.steps.append(
@@ -65,6 +65,7 @@ class MetricsRecorder:
                 "served": int(served),
                 "idle_moves": int(idle_moves),
                 "idle_driving_distance": idle_driving_distance,
+                "cross_zone_dispatch": int(cross_zone_dispatch),
                 "vacant": int(fleet.vacant.sum()),
                 "occupied": int(fleet.occupied.sum()),
                 "full_batteries": int(full_batteries),
@@ -112,17 +113,23 @@ class MetricsRecorder:
         max_charging_power_kw = max(s["charging_power_kw"] for s in self.steps)
         max_total_charging_demand_kw = max(s["total_charging_demand_kw"] for s in self.steps)
         max_station_total_power_kw = max(s["station_total_power_kw"] for s in self.steps)
+        charging_power_series = np.array([s["charging_power_kw"] for s in self.steps], dtype=float)
+        avg_charging_power_kw = float(charging_power_series.mean()) if charging_power_series.size > 0 else 0.0
+        charging_power_std_kw = float(charging_power_series.std()) if charging_power_series.size > 0 else 0.0
+        total_station_power_series = np.array([s["station_total_power_kw"] for s in self.steps], dtype=float)
+        avg_total_station_power_kw = float(total_station_power_series.mean()) if total_station_power_series.size > 0 else 0.0
 
         has_idle_distance = all(s["idle_driving_distance"] is not None for s in self.steps)
         total_idle_driving_distance = (
             float(sum(float(s["idle_driving_distance"]) for s in self.steps)) if has_idle_distance else None
         )
+        total_cross_zone_dispatch = sum(s.get("cross_zone_dispatch", 0) for s in self.steps)
 
         ratio_den = swap_requests if swap_requests > 0 else swap_arrivals
         battery_swap_success_ratio = float(successful_swaps / ratio_den) if ratio_den > 0 else 0.0
         deadline_miss_ratio = float(deadline_misses / ratio_den) if ratio_den > 0 else 0.0
         charging_deadline_miss_ratio = (
-            float(charging_deadline_misses / successful_swaps) if successful_swaps > 0 else 0.0
+            float(charging_deadline_misses / charging_demand) if charging_demand > 0 else 0.0
         )
         avg_waiting_time_for_battery_slots = (
             float(waiting_time_for_battery_slots / ratio_den) if ratio_den > 0 else 0.0
@@ -147,6 +154,7 @@ class MetricsRecorder:
         return {
             "total_served": served,
             "total_idle_moves": idle_moves,
+            "total_cross_zone_dispatch": total_cross_zone_dispatch,
             "total_idle_driving_distance": total_idle_driving_distance,
             "total_swap_arrivals": swap_arrivals,
             "total_swap_requests": swap_requests,
@@ -171,5 +179,8 @@ class MetricsRecorder:
             "waiting_vehicle_slots_by_station_top5": waiting_vehicle_slots_by_station_top5,
             "max_waiting_vehicles_by_station_top5": max_waiting_vehicles_by_station_top5,
             "peak_station_power_kw": peak_station_power_kw,
+            "avg_charging_power_kw": avg_charging_power_kw,
+            "charging_power_std_kw": charging_power_std_kw,
+            "avg_total_station_power_kw": avg_total_station_power_kw,
             "steps": len(self.steps),
         }

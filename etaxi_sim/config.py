@@ -60,8 +60,8 @@ class ModelConfig:
     reposition_top_swap_targets: int = 4
     reposition_low_energy_swap_bonus: float = 0.15
     reposition_transition_topk: int = 6
-    reposition_solver_method: int = 2
-    reposition_solver_crossover: int = 0
+    reposition_solver_method: int = -1
+    reposition_solver_crossover: int = -1
     reposition_numeric_focus: int = 0
     reposition_presolve: int = -1
     reposition_use_lp_primal_start: bool = True

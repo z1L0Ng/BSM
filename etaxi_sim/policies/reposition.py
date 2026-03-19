@@ -95,8 +95,11 @@ class RepositionPolicyConfig:
     lp_warm_start_mode: int = 2
     eliminate_auxiliary_vars: bool = True
     preaggregate_transitions: bool = True
-    allow_no_incumbent_retry: bool = False
+    allow_no_incumbent_retry: bool = True
     allow_gurobi_error_fallback: bool = False
+    # DEBUG-ONLY: set True to fall back to heuristic when solver finds no incumbent.
+    # Should remain False in production — fix solver root causes instead.
+    allow_heuristic_fallback: bool = False
 
 
 def _update_reposition_trace(
@@ -937,6 +940,22 @@ def gurobi_reposition_policy(
                         config=retry_cfg,
                         _retry_stage=2,
                     )
+            if config.allow_heuristic_fallback:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=0,
+                    runtime_sec=float(model.Runtime),
+                    outcome="fallback_heuristic_no_incumbent",
+                    note=f"h={H}, tl={config.time_limit_sec}, retry_stage={_retry_stage}",
+                    extra=trace_extra,
+                )
+                return heuristic_battery_aware_policy(
+                    fleet=fleet,
+                    demand=demand_window[0],
+                    station_full_batteries=station_full_batteries,
+                    config=config,
+                )
             raise RuntimeError(f"reposition model has no solution, status={model.Status}")
 
         x_stage: Dict[Tuple[int, int, int], float] = {}
