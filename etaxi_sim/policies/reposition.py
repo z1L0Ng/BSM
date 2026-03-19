@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass, replace
 from time import perf_counter
 from typing import Dict, List, Tuple
 
 import numpy as np
+
+_log = logging.getLogger(__name__)
 
 from etaxi_sim.data.preprocess import TransitionProbabilities
 from etaxi_sim.models.fleet import FleetState
@@ -295,6 +298,13 @@ def _allocate_integer_dispatch(
             if used[i, l] > cap:
                 overflow = used[i, l] - cap
                 if overflow > 0:
+                    # This should not occur if the LP respected the outbound constraint,
+                    # but can happen due to LP numerical tolerance.  Log for diagnosis.
+                    _log.warning(
+                        "_allocate_integer_dispatch: overflow %d at zone=%d level=%d "
+                        "(used=%d > vacant=%d); trimming dispatch.",
+                        overflow, i, l, used[i, l], cap,
+                    )
                     # Remove from Y first, then X to prioritize service.
                     for j in range(m):
                         if overflow <= 0:
@@ -555,28 +565,36 @@ def gurobi_reposition_policy(
 
                 swap_targets = swap_targets_by_state[(i, l)]
 
+                # For k=0, individual dispatch vars are trivially bounded by the
+                # total fleet at this state; explicit UBs let Gurobi's presolve
+                # tighten bounds without propagating through the outbound constraint.
+                ub_k0 = float(fleet.vacant[i, l]) if k == 0 else GRB.INFINITY
+
                 if l > config.swap_low_energy_threshold:
                     for j in service_targets:
                         key = (k, i, j, l)
                         if key in x_vars:
                             continue
-                        var = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"x_{k}_{i}_{j}_{l}")
+                        var = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, ub=ub_k0, name=f"x_{k}_{i}_{j}_{l}")
                         x_vars[key] = var
                         state_out.append(var)
                         service_inbound.setdefault((k, j), []).append(var)
                         service_state_inbound.setdefault((k, j, l), []).append(var)
                         move_cost_terms.append(float(energy_consumption[i, j]) * var)
 
-                for j in swap_targets:
-                    key = (k, i, j, l)
-                    if key in y_vars:
-                        continue
-                    var = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, name=f"y_{k}_{i}_{j}_{l}")
-                    y_vars[key] = var
-                    state_out.append(var)
-                    swap_inbound.setdefault((k, j, l), []).append(var)
-                    move_cost_terms.append(float(energy_consumption[i, j]) * var)
-                    if l <= config.swap_low_energy_threshold:
+                # Only route low-energy vehicles to swap stations via y_vars.
+                # High-energy vehicles (l > threshold) have no incentive to go to
+                # swap stations; routing them there wastes swap capacity and LP size.
+                if l <= config.swap_low_energy_threshold:
+                    for j in swap_targets:
+                        key = (k, i, j, l)
+                        if key in y_vars:
+                            continue
+                        var = model.addVar(vtype=GRB.CONTINUOUS, lb=0.0, ub=ub_k0, name=f"y_{k}_{i}_{j}_{l}")
+                        y_vars[key] = var
+                        state_out.append(var)
+                        swap_inbound.setdefault((k, j, l), []).append(var)
+                        move_cost_terms.append(float(energy_consumption[i, j]) * var)
                         low_energy_y.append(var)
 
         if not x_vars and not y_vars:
@@ -893,6 +911,34 @@ def gurobi_reposition_policy(
         )
 
         if model.SolCount <= 0:
+            # Hard stop: LP is unbounded — retrying cannot help.
+            if status_code == GRB.UNBOUNDED:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=0,
+                    runtime_sec=float(model.Runtime),
+                    outcome="unbounded",
+                    note="LP is unbounded; check objective or variable bounds",
+                    extra=trace_extra,
+                )
+                raise RuntimeError(
+                    f"reposition LP is unbounded at t={t_start} (status={status_code}); "
+                    "check that fleet.vacant is non-negative and transition matrix is row-stochastic"
+                )
+            # Hard stop: LP is infeasible (should not occur since zero-dispatch is always feasible).
+            # Log with a distinct outcome so it can be investigated.
+            if status_code == GRB.INFEASIBLE:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=0,
+                    runtime_sec=float(model.Runtime),
+                    outcome="infeasible",
+                    note=f"h={H}, tl={config.time_limit_sec}, retry_stage={_retry_stage}",
+                    extra=trace_extra,
+                )
+                # Fall through to retry — H=1 model is a different LP and may be feasible.
             if config.allow_no_incumbent_retry:
                 if _retry_stage == 0 and H > 1:
                     _update_reposition_trace(
