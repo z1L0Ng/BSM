@@ -87,8 +87,8 @@ class RepositionPolicyConfig:
     low_energy_swap_bonus: float = 0.15
     transition_topk: int = 6
     time_limit_sec: float = 3.0
-    solver_method: int = 2
-    solver_crossover: int = 0
+    solver_method: int = -1
+    solver_crossover: int = -1
     numeric_focus: int = 0
     presolve: int = -1
     use_lp_primal_start: bool = True
