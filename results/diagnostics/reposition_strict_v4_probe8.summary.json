@@ -1,0 +1,72 @@
+{
+  "rows": 8,
+  "effective_horizon": 64,
+  "requested_limit": 8,
+  "executed_steps": 8,
+  "timed_out": false,
+  "max_run_seconds": 1800.0,
+  "run_wall_time_sec": 216.19304245902458,
+  "reposition_solver": "gurobi",
+  "charging_solver": "fcfs",
+  "inventory_per_station": 5,
+  "chargers_per_station": 5,
+  "swap_capacity_per_station": 6,
+  "solver_time_limit_sec": 30.0,
+  "reposition_solver_method": 2,
+  "reposition_solver_crossover": 0,
+  "reposition_numeric_focus": 0,
+  "reposition_presolve": -1,
+  "reposition_use_lp_primal_start": true,
+  "reposition_lp_warm_start_mode": 2,
+  "reposition_eliminate_auxiliary_vars": true,
+  "reposition_preaggregate_transitions": true,
+  "outcome_counts": {
+    "optimized": 8
+  },
+  "status_counts": {
+    "2": 8
+  },
+  "failed_steps": [],
+  "output_csv": "results/diagnostics/reposition_strict_v4_probe8.csv",
+  "metrics_summary": {
+    "total_served": 4232,
+    "total_idle_moves": 21977,
+    "total_idle_driving_distance": 3537.0,
+    "total_swap_arrivals": 1570,
+    "total_swap_requests": 5233,
+    "total_number_of_swaps": 1031,
+    "battery_swap_success_ratio": 0.197018918402446,
+    "total_unmet_battery_demand": 4202,
+    "total_waiting_vehicles": 4202,
+    "total_deadline_misses": 4202,
+    "deadline_miss_ratio": 0.802981081597554,
+    "total_charging_deadline_misses": 0,
+    "total_charging_deadline_missed_slots": 0,
+    "charging_deadline_miss_ratio": 0.0,
+    "total_charging_demand": 7956,
+    "max_total_charging_demand_kw": 30420.0,
+    "max_charging_power_demand_kw": 30420.0,
+    "max_charging_power_kw": 30420.0,
+    "max_station_total_power_kw": 35720.0,
+    "avg_waiting_time_for_battery_slots": 0.802981081597554,
+    "waiting_vehicles_p50": 532.0,
+    "waiting_vehicles_p90": 540.6,
+    "waiting_vehicles_p99": 541.86,
+    "waiting_vehicle_slots_by_station_top5": {
+      "64": 112,
+      "212": 112,
+      "27": 104,
+      "39": 104,
+      "98": 104
+    },
+    "max_waiting_vehicles_by_station_top5": {
+      "64": 14,
+      "212": 14,
+      "27": 13,
+      "39": 13,
+      "98": 13
+    },
+    "peak_station_power_kw": 170.0,
+    "steps": 8
+  }
+}

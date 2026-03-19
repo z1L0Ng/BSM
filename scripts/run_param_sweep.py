@@ -331,9 +331,17 @@ def main() -> None:
                 trace_no_incumbent_events = int(
                     sum(
                         trace_event_outcomes.get(name, 0)
-                        for name in ("no_incumbent", "retry_h1_no_incumbent", "retry_t20_no_incumbent")
+                        for name in (
+                            "no_incumbent",
+                            "no_incumbent_first_pass",
+                            "no_incumbent_after_retry",
+                            "retry_h1_no_incumbent",
+                            "retry_t20_no_incumbent",
+                        )
                     )
                 )
+                trace_second_pass_events = int(trace_event_outcomes.get("second_pass_method0", 0))
+                trace_optimized_after_retry_events = int(trace_event_outcomes.get("optimized_after_retry", 0))
                 row = {
                     "inventory_per_station": inventory,
                     "chargers_per_station": chargers,
@@ -369,6 +377,8 @@ def main() -> None:
                     ),
                     "reposition_event_retry_count": trace_retry_events,
                     "reposition_event_no_incumbent_count": trace_no_incumbent_events,
+                    "reposition_event_second_pass_method0_count": trace_second_pass_events,
+                    "reposition_event_optimized_after_retry_count": trace_optimized_after_retry_events,
                 }
                 row.update(summary)
                 rows.append(row)

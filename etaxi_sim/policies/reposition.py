@@ -844,59 +844,171 @@ def gurobi_reposition_policy(
         )
         trace_extra.update(constr_counts)
 
+        def _snapshot_solver_state() -> tuple[int, int, float | None, int | None, float | None, float | None, float]:
+            status_code = int(model.Status)
+            sol_count = int(model.SolCount)
+            iter_count: float | None
+            bar_iter_count: int | None
+            obj_val: float | None
+            obj_bound: float | None
+            try:
+                iter_count = float(model.IterCount)
+            except Exception:
+                iter_count = None
+            try:
+                bar_iter_count = int(model.BarIterCount)
+            except Exception:
+                bar_iter_count = None
+            try:
+                obj_bound = float(model.ObjBound)
+            except Exception:
+                obj_bound = None
+            if sol_count > 0:
+                try:
+                    obj_val = float(model.ObjVal)
+                except Exception:
+                    obj_val = None
+            else:
+                obj_val = None
+            runtime_sec = float(model.Runtime)
+            return (status_code, sol_count, iter_count, bar_iter_count, obj_val, obj_bound, runtime_sec)
+
         optimize_start = perf_counter()
         model.optimize()
-        optimize_time_sec = float(perf_counter() - optimize_start)
+        first_optimize_time_sec = float(perf_counter() - optimize_start)
+        (
+            status_code,
+            sol_count,
+            iter_count,
+            bar_iter_count,
+            obj_val,
+            obj_bound,
+            runtime_sec,
+        ) = _snapshot_solver_state()
 
-        status_code = int(model.Status)
-        sol_count = int(model.SolCount)
-        iter_count: float | None
-        bar_iter_count: int | None
-        obj_val: float | None
-        obj_bound: float | None
-        try:
-            iter_count = float(model.IterCount)
-        except Exception:
-            iter_count = None
-        try:
-            bar_iter_count = int(model.BarIterCount)
-        except Exception:
-            bar_iter_count = None
-        try:
-            obj_bound = float(model.ObjBound)
-        except Exception:
-            obj_bound = None
-        if sol_count > 0:
-            try:
-                obj_val = float(model.ObjVal)
-            except Exception:
-                obj_val = None
+        trace_extra["first_pass_status"] = status_code
+        trace_extra["first_pass_sol_count"] = sol_count
+        trace_extra["first_pass_runtime_sec"] = runtime_sec
+        trace_extra["first_pass_optimize_time_sec"] = first_optimize_time_sec
+        trace_extra["first_pass_iter_count"] = iter_count
+        trace_extra["first_pass_bar_iter_count"] = bar_iter_count
+        trace_extra["first_pass_obj_val"] = obj_val
+        trace_extra["first_pass_obj_bound"] = obj_bound
+        trace_extra["second_pass_method0_attempted"] = 0
+
+        if sol_count <= 0:
+            trace_extra["optimize_time_sec"] = first_optimize_time_sec
+            trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
+            trace_extra["iter_count"] = iter_count
+            trace_extra["bar_iter_count"] = bar_iter_count
+            trace_extra["obj_val"] = obj_val
+            trace_extra["obj_bound"] = obj_bound
+            _update_reposition_trace(
+                t_start=t_start,
+                status=status_code,
+                sol_count=sol_count,
+                runtime_sec=runtime_sec,
+                outcome="no_incumbent_first_pass",
+                note=f"method={int(config.solver_method)}, tl={config.time_limit_sec}",
+                extra=trace_extra,
+            )
+            if int(config.solver_method) != 0:
+                trace_extra["second_pass_method0_attempted"] = 1
+                try:
+                    model.reset()
+                except Exception:
+                    pass
+                model.Params.Method = 0
+                second_optimize_start = perf_counter()
+                model.optimize()
+                second_optimize_time_sec = float(perf_counter() - second_optimize_start)
+                (
+                    status_code,
+                    sol_count,
+                    iter_count,
+                    bar_iter_count,
+                    obj_val,
+                    obj_bound,
+                    runtime_sec,
+                ) = _snapshot_solver_state()
+                trace_extra["second_pass_method0_status"] = status_code
+                trace_extra["second_pass_method0_sol_count"] = sol_count
+                trace_extra["second_pass_method0_runtime_sec"] = runtime_sec
+                trace_extra["second_pass_method0_optimize_time_sec"] = second_optimize_time_sec
+                trace_extra["second_pass_method0_iter_count"] = iter_count
+                trace_extra["second_pass_method0_bar_iter_count"] = bar_iter_count
+                trace_extra["second_pass_method0_obj_val"] = obj_val
+                trace_extra["second_pass_method0_obj_bound"] = obj_bound
+                trace_extra["optimize_time_sec"] = first_optimize_time_sec + second_optimize_time_sec
+                trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
+                trace_extra["iter_count"] = iter_count
+                trace_extra["bar_iter_count"] = bar_iter_count
+                trace_extra["obj_val"] = obj_val
+                trace_extra["obj_bound"] = obj_bound
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=sol_count,
+                    runtime_sec=runtime_sec,
+                    outcome="second_pass_method0",
+                    note=f"first_status={trace_extra['first_pass_status']}, first_sol={trace_extra['first_pass_sol_count']}",
+                    extra=trace_extra,
+                )
+                if sol_count > 0:
+                    _update_reposition_trace(
+                        t_start=t_start,
+                        status=status_code,
+                        sol_count=sol_count,
+                        runtime_sec=runtime_sec,
+                        outcome="optimized_after_retry",
+                        note="retry_method=0",
+                        extra=trace_extra,
+                    )
+                else:
+                    _update_reposition_trace(
+                        t_start=t_start,
+                        status=status_code,
+                        sol_count=sol_count,
+                        runtime_sec=runtime_sec,
+                        outcome="no_incumbent_after_retry",
+                        note="retry_method=0_failed",
+                        extra=trace_extra,
+                    )
+            else:
+                _update_reposition_trace(
+                    t_start=t_start,
+                    status=status_code,
+                    sol_count=sol_count,
+                    runtime_sec=runtime_sec,
+                    outcome="no_incumbent_after_retry",
+                    note="method_already_0",
+                    extra=trace_extra,
+                )
         else:
-            obj_val = None
-        trace_extra["optimize_time_sec"] = optimize_time_sec
-        trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
-        trace_extra["iter_count"] = iter_count
-        trace_extra["bar_iter_count"] = bar_iter_count
-        trace_extra["obj_val"] = obj_val
-        trace_extra["obj_bound"] = obj_bound
-        _update_reposition_trace(
-            t_start=t_start,
-            status=status_code,
-            sol_count=sol_count,
-            runtime_sec=float(model.Runtime),
-            outcome="optimized" if sol_count > 0 else "no_incumbent",
-            note="",
-            extra=trace_extra,
-        )
+            trace_extra["optimize_time_sec"] = first_optimize_time_sec
+            trace_extra["wall_time_sec"] = float(perf_counter() - wall_start)
+            trace_extra["iter_count"] = iter_count
+            trace_extra["bar_iter_count"] = bar_iter_count
+            trace_extra["obj_val"] = obj_val
+            trace_extra["obj_bound"] = obj_bound
+            _update_reposition_trace(
+                t_start=t_start,
+                status=status_code,
+                sol_count=sol_count,
+                runtime_sec=runtime_sec,
+                outcome="optimized",
+                note="",
+                extra=trace_extra,
+            )
 
-        if model.SolCount <= 0:
+        if sol_count <= 0:
             if config.allow_no_incumbent_retry:
                 if _retry_stage == 0 and H > 1:
                     _update_reposition_trace(
                         t_start=t_start,
                         status=status_code,
                         sol_count=sol_count,
-                        runtime_sec=float(model.Runtime),
+                        runtime_sec=runtime_sec,
                         outcome="retry_h1_no_incumbent",
                         note=f"h={H}, tl={config.time_limit_sec}",
                         extra=trace_extra,
@@ -919,7 +1031,7 @@ def gurobi_reposition_policy(
                         t_start=t_start,
                         status=status_code,
                         sol_count=sol_count,
-                        runtime_sec=float(model.Runtime),
+                        runtime_sec=runtime_sec,
                         outcome="retry_t20_no_incumbent",
                         note=f"h={H}, tl={config.time_limit_sec}",
                         extra=trace_extra,

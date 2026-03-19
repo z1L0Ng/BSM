@@ -1,0 +1,34 @@
+{
+  "rows": 1,
+  "effective_horizon": 64,
+  "requested_limit": 1,
+  "executed_steps": 1,
+  "timed_out": false,
+  "max_run_seconds": 240.0,
+  "run_wall_time_sec": 32.22698799998034,
+  "reposition_solver": "gurobi",
+  "charging_solver": "fcfs",
+  "inventory_per_station": 5,
+  "chargers_per_station": 5,
+  "swap_capacity_per_station": 6,
+  "solver_time_limit_sec": 20.0,
+  "reposition_solver_method": 2,
+  "reposition_solver_crossover": 0,
+  "reposition_numeric_focus": 0,
+  "reposition_presolve": -1,
+  "reposition_use_lp_primal_start": true,
+  "reposition_lp_warm_start_mode": 2,
+  "reposition_eliminate_auxiliary_vars": true,
+  "reposition_preaggregate_transitions": true,
+  "outcome_counts": {
+    "exception": 1
+  },
+  "status_counts": {
+    "9": 1
+  },
+  "failed_steps": [
+    0
+  ],
+  "output_csv": "/Users/zilongzeng/Research/BSM/results/diagnostics/reposition_solver_param_sweep_runs_strict_v3_focus/p03.csv",
+  "metrics_summary": {}
+}

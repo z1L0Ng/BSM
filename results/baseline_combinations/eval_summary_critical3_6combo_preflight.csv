@@ -1,0 +1,7 @@
+group_id,combo,total_served,battery_swap_success_ratio,deadline_miss_ratio,charging_deadline_miss_ratio,total_waiting_vehicles,max_station_total_power_kw
+G2,heuristic_plus_fcfs,415,0.9166666666666666,0.0833333333333333,0.0,64,23780.0
+G2,ideal_plus_fcfs,423,1.0,0.0,0.0,0,23780.0
+G2,heuristic_plus_gurobi,415,0.9166666666666666,0.0833333333333333,0.0,64,22070.0
+G2,ideal_plus_gurobi,423,1.0,0.0,0.0,0,21440.0
+G2,algorithm_plus_fcfs,423,0.9107373868046572,0.0892626131953428,0.0,69,23780.0
+G2,algorithm_plus_gurobi,423,0.9107373868046572,0.0892626131953428,0.0,69,22070.0

@@ -1,0 +1,4 @@
+group_id,inventory_per_station,chargers_per_station,swap_capacity_per_station
+G1,4,3,4
+G2,6,3,4
+G3,6,5,4
