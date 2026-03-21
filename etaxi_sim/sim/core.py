@@ -44,6 +44,7 @@ class Simulation:
     reposition_top_demand_targets: int
     reposition_top_swap_targets: int
     reposition_low_energy_swap_bonus: float
+    reposition_service_discount_gamma: float
     reposition_transition_topk: int
     reposition_solver_method: int
     reposition_solver_crossover: int
@@ -78,6 +79,7 @@ class Simulation:
             idle_cost_weight=self.reposition_idle_cost_weight,
             service_reward=1.0,
             low_energy_swap_bonus=self.reposition_low_energy_swap_bonus,
+            service_discount_gamma=self.reposition_service_discount_gamma,
             transition_topk=self.reposition_transition_topk,
             time_limit_sec=self.solver_time_limit_sec,
             solver_method=self.reposition_solver_method,

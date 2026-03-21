@@ -85,6 +85,7 @@ class RepositionPolicyConfig:
     idle_cost_weight: float = 0.05
     service_reward: float = 1.0
     low_energy_swap_bonus: float = 0.15
+    service_discount_gamma: float = 1.0
     transition_topk: int = 6
     time_limit_sec: float = 3.0
     solver_method: int = 2
@@ -497,6 +498,9 @@ def gurobi_reposition_policy(
                 "presolve": int(config.presolve),
                 "lp_warm_start_enabled": int(bool(config.use_lp_primal_start)),
                 "lp_warm_start_mode": int(config.lp_warm_start_mode),
+                "service_discount_gamma": float(config.service_discount_gamma),
+                "low_energy_swap_bonus": float(config.low_energy_swap_bonus),
+                "idle_cost_weight": float(config.idle_cost_weight),
             }
         )
 
@@ -779,9 +783,10 @@ def gurobi_reposition_policy(
         constraints_build_time_sec = float(perf_counter() - constraints_build_start)
 
         objective_build_start = perf_counter()
+        gamma = float(config.service_discount_gamma)
         objective = (
             config.service_reward
-            * gp.quicksum((0.95**k) * served[(k, j)] for k in range(H) for j in range(m))
+            * gp.quicksum((gamma**k) * served[(k, j)] for k in range(H) for j in range(m))
             - config.idle_cost_weight * gp.quicksum(move_cost_terms)
             + config.low_energy_swap_bonus * gp.quicksum(low_energy_y)
         )

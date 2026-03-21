@@ -224,6 +224,7 @@ def main() -> None:
         reposition_top_demand_targets=cfg.model.reposition_top_demand_targets,
         reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
         reposition_low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
+        reposition_service_discount_gamma=cfg.model.reposition_service_discount_gamma,
         reposition_transition_topk=cfg.model.reposition_transition_topk,
         reposition_solver_method=cfg.model.reposition_solver_method,
         reposition_solver_crossover=cfg.model.reposition_solver_crossover,
@@ -268,6 +269,10 @@ def main() -> None:
             "charge_power_kw": cfg.sim.charge_power_kw,
             "reposition_solver": cfg.model.reposition_solver,
             "charging_solver": cfg.model.charging_solver,
+            "reposition_idle_cost_weight": cfg.model.reposition_idle_cost_weight,
+            "reposition_low_energy_swap_bonus": cfg.model.reposition_low_energy_swap_bonus,
+            "reposition_service_discount_gamma": cfg.model.reposition_service_discount_gamma,
+            "reposition_top_swap_targets": cfg.model.reposition_top_swap_targets,
             "station_swapping_capacity": cfg.station.swapping_capacity,
             "station_chargers": cfg.station.chargers,
         }

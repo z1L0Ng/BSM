@@ -240,6 +240,7 @@ def main() -> None:
         reposition_top_demand_targets=cfg.model.reposition_top_demand_targets,
         reposition_top_swap_targets=cfg.model.reposition_top_swap_targets,
         reposition_low_energy_swap_bonus=cfg.model.reposition_low_energy_swap_bonus,
+        reposition_service_discount_gamma=cfg.model.reposition_service_discount_gamma,
         reposition_transition_topk=cfg.model.reposition_transition_topk,
         reposition_solver_method=(
             int(args.reposition_solver_method)

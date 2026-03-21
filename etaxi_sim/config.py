@@ -59,6 +59,7 @@ class ModelConfig:
     reposition_top_demand_targets: int = 8
     reposition_top_swap_targets: int = 4
     reposition_low_energy_swap_bonus: float = 0.15
+    reposition_service_discount_gamma: float = 1.0
     reposition_transition_topk: int = 6
     reposition_solver_method: int = 2
     reposition_solver_crossover: int = 0
