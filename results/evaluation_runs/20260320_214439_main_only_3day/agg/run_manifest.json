@@ -1,0 +1,53 @@
+{
+  "commit_hash": "03efb8a",
+  "configs": [
+    {
+      "path": "configs/generated_main_only/ev_eval_6_22_strict30_2025-11-01.yaml",
+      "sha256": "85148f5eec311f11b47c533b3253f2b9f81c2d50bed14ea106fe5746b18eee20"
+    },
+    {
+      "path": "configs/generated_main_only/ev_eval_6_22_strict30_2025-11-05.yaml",
+      "sha256": "b18d6cc656466c9f2bf2a1feacdd160ff3b660e62d8c8f6037f4b49593a9ee3a"
+    },
+    {
+      "path": "configs/generated_main_only/ev_eval_6_22_strict30_2025-11-09.yaml",
+      "sha256": "ae75eba18acd854ee89a8ecd643ba99a0a7be0603abd427a57dec90a03ed2b50"
+    }
+  ],
+  "scope": {
+    "sim_start_hour": 6,
+    "sim_end_hour": 22,
+    "timestep_minutes": 15,
+    "horizon": 64,
+    "dates": [
+      "2025-11-01",
+      "2025-11-05",
+      "2025-11-09"
+    ],
+    "groups": [
+      {
+        "group_id": "G1",
+        "inventory": 4,
+        "chargers": 3,
+        "swap_capacity": 4
+      },
+      {
+        "group_id": "G2",
+        "inventory": 6,
+        "chargers": 3,
+        "swap_capacity": 4
+      },
+      {
+        "group_id": "G3",
+        "inventory": 6,
+        "chargers": 5,
+        "swap_capacity": 4
+      }
+    ],
+    "combos": [
+      "algorithm_plus_gurobi",
+      "heuristic_plus_fcfs",
+      "ideal_plus_fcfs"
+    ]
+  }
+}

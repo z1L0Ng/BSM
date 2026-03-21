@@ -1,0 +1,3 @@
+baseline,wins,ties,losses,mean_delta_total_served,std_delta_total_served
+heuristic_plus_fcfs,9,0,0,41329.333333333336,3626.7284499945677
+ideal_plus_fcfs,9,0,0,9773.222222222223,3860.434165277844
