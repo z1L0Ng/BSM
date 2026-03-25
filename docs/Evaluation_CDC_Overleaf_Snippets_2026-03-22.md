@@ -10,8 +10,10 @@ Use the following names consistently in text, tables, and figures.
 | Paper Name | Abbrev. | Internal Combo ID |
 |---|---|---|
 | Coordinated Optimization Policy | COP | `algorithm_plus_gurobi` |
+| Fleet Dispatch Baseline | FDB | `algorithm_plus_fcfs` |
 | Heuristic Dispatch Baseline | HDB | `heuristic_plus_fcfs` |
-| Oracle Dispatch Baseline | ORB | `ideal_plus_fcfs` |
+| Oracle Dispatch Baseline | ODB | `ideal_plus_fcfs` |
+| Capacity-Constrained Charging Baseline | CCB | `algorithm_plus_fcfs` with capped chargers |
 
 Notes:
 - Internal combo IDs remain in scripts/logs for reproducibility.
@@ -23,57 +25,60 @@ Notes:
 \section{Evaluation}
 
 \subsection{Baseline Evaluation Setup}
-We evaluate all methods under a unified protocol to ensure paired comparability across dispatch and charging decisions.
+We use NYC yellow taxi trip records (November 2025) to construct time-binned passenger demand.
 The simulation window is fixed to 06:00--22:00 with 15-minute slots and receding horizon $H=64$.
-All methods use the same request stream, date set, random-seed policy, and resource grouping (Critical3: G1/G2/G3).
-The primary evaluation covers three dates (2025-11-01, 2025-11-05, 2025-11-09), producing 9 matched \texttt{(date, group)} units per pairwise method comparison.
+Because real battery-swapping-station operation logs are not available in this study, station-side operations are simulated using parameterized station resources.
+Each method uses the same demand input, date set, random-seed policy, and resource settings.
+The primary evaluation covers three dates (2025-11-01, 2025-11-05, 2025-11-09), producing 9 matched (date, resource-setting) units per pairwise method comparison.
 
 We compare:
 \begin{itemize}
   \item \textbf{COP}: Coordinated Optimization Policy (proposed),
+  \item \textbf{FDB}: Fleet Dispatch Baseline (fleet-level dispatch + FCFS charging),
   \item \textbf{HDB}: Heuristic Dispatch Baseline,
-  \item \textbf{ORB}: Oracle Dispatch Baseline.
+  \item \textbf{ODB}: Oracle Dispatch Baseline.
 \end{itemize}
+In a separate capacity-constrained scenario, we additionally evaluate \textbf{CCB}, which follows fleet-level dispatch with FCFS charging under capped charger concurrency (e.g., 90\% active chargers).
 
-The primary endpoint is \texttt{total\_served}.
+The primary endpoint is total served.
 To characterize operational trade-offs, we additionally report swap success, deadline miss, charging miss, waiting, and station power.
-For paired significance on \texttt{total\_served}, we use two-sided sign tests over matched units.
+For paired significance on total served, we use two-sided sign tests over matched units.
 
 \subsection{Primary Results}
 \textbf{Summary of outcome.}
-COP achieves statistically significant gains in \texttt{total\_served} against both baselines across all matched units, while exhibiting non-negligible quality trade-offs in swap/deadline related metrics.
+COP achieves statistically significant gains in total served against HDB and ODB across matched units, while exhibiting non-negligible quality trade-offs in swap/deadline-related metrics.
 
 \textbf{Aggregate service performance (27 runs).}
 \begin{itemize}
   \item COP: $77613.67 \pm 6455.29$
   \item HDB: $36284.33 \pm 3285.06$
-  \item ORB: $67840.44 \pm 6051.73$
+  \item ODB: $67840.44 \pm 6051.73$
 \end{itemize}
-Relative to baselines, COP improves \texttt{total\_served} by $+113.9\%$ over HDB and $+14.4\%$ over ORB.
+Relative to baselines, COP improves total served by $+113.9\%$ over HDB and $+14.4\%$ over ODB.
 
 \textbf{Paired consistency and significance (9 matched units per baseline).}
-COP records Win/Tie/Loss = $9/0/0$ versus both HDB and ORB.
-Sign tests on \texttt{total\_served} give:
+COP is higher in all 9 matched units against HDB and also higher in all 9 matched units against ODB.
+Sign tests on total served give:
 \begin{itemize}
   \item COP vs HDB: mean paired delta $= +41329.33$, $p=0.0039$;
-  \item COP vs ORB: mean paired delta $= +9773.22$, $p=0.0039$.
+  \item COP vs ODB: mean paired delta $= +9773.22$, $p=0.0039$.
 \end{itemize}
 
 \textbf{Trade-off profile.}
 The service gain is accompanied by a clear shift in operational quality:
 \begin{itemize}
-  \item swap success ratio: COP $=0.1531$, HDB $=0.8969$, ORB $=1.0000$;
-  \item deadline miss ratio: COP $=0.8469$, HDB $=0.1031$, ORB $=0.0000$;
-  \item charging miss ratio: COP $=0.0715$, HDB $=0.1089$, ORB $=0.4404$.
+  \item swap success ratio: COP $=0.1531$, HDB $=0.8969$, ODB $=1.0000$;
+  \item deadline miss ratio: COP $=0.8469$, HDB $=0.1031$, ODB $=0.0000$;
+  \item charging miss ratio: COP $=0.0715$, HDB $=0.1089$, ODB $=0.4404$.
 \end{itemize}
 Therefore, the evidence supports a service-priority operating regime rather than uniform dominance across all metrics.
 
 \textbf{Solver reliability.}
-No no-incumbent reposition event is observed in this evaluation (\texttt{reposition\_event\_no\_incumbent\_count}=0), indicating stable solver behavior under the tested protocol.
+No no-incumbent reposition event is observed in this evaluation (reposition_event_no_incumbent_count=0), indicating stable solver behavior under the tested protocol.
 
 \subsection{Ablation Evidence}
 Ablation covers 54 runs (3 dates $\times$ 3 groups $\times$ 6 combinations) using a two-factor decomposition: dispatch policy and charging policy.
-Results indicate that dispatch policy choice is the dominant source of \texttt{total\_served} variation, while charging solver changes are secondary and mixed in sign.
+Results indicate that dispatch policy choice is the dominant source of total served variation, while charging solver changes are secondary and mixed in sign.
 In particular, moving from coordinated dispatch to heuristic dispatch causes a substantial service drop regardless of charging mode.
 
 \subsection{Protocol-Aligned Time-Series Check}
@@ -161,33 +166,36 @@ Expected outputs:
 
 ## 5) Consistency Checklist Before Overleaf Update
 
-- All figure legends and text use `COP/HDB/ORB` only.
+- All figure legends and text use `COP/FDB/HDB/ODB/CCB` naming consistently.
 - No implementation-style method names appear in the paper body.
 - Protocol text is fixed and identical everywhere: `06:00--22:00`, `15-min`, `horizon=64`, dates `2025-11-01/05/09`, groups `G1/G2/G3`.
-- Reported primary significance values match `paired_stats.csv` (`p=0.0039` for both pairwise comparisons).
+- Reported primary significance values match `paired_stats.csv` (`p=0.0039` for COP vs HDB and COP vs ODB).
 - Time-series cumulative served delta matches `+44947` (COP minus HDB).
 
-## 6) Prompt for Experiment Agent (Incremental Re-check)
+## 6) Prompt for Experiment Agent (Teacher-Feedback Increment)
 
 Use this directly:
 
 ```text
-Please run an incremental verification pass for CDC evaluation outputs only.
-Do not rerun full experiments.
+Please execute `docs/Evaluation_老师反馈对齐执行计划_2026-03-25.md` end-to-end (Tasks A/B/C), and only do Evaluation increment work.
 
-Tasks:
-1) Validate that main result files are unchanged in shape and key statistics:
-   - primary rows = 27
-   - ablation rows = 54
-   - timeseries rows = 64
-2) Re-run plotting script `scripts/plot_paper_core3_pdf.py` and confirm exactly seven PDF figures plus `core3_summary.json` are generated.
-3) Verify `core3_summary.json` includes:
-   - `timeseries_delta_served_sum_COP_minus_HDB = 44947`
-   - all expected file names
-4) Produce a short markdown report with:
-   - pass/fail per check
-   - any path mismatch or missing-column issue
-   - final artifact directory
+Hard constraints:
+1) Do not rerun the 27-run primary matrix.
+2) Reuse existing 54-run ablation output and extract FDB (`algorithm_plus_fcfs`) summaries.
+3) Run only CCB 9 runs (3 dates x 3 settings) using algorithm dispatch + FCFS charging with cap90 integerized chargers (3->2, 5->4).
+4) Do not modify algorithm implementation.
 
-Output only the verification report and key command lines used.
+Required deliverables:
+- method_summary_primary_plus_fdb.csv
+- date_summary_primary_plus_fdb.csv
+- cap90_ccb_raw.csv
+- cap90_ccb_summary.csv
+- evaluation_tables_for_paper.csv
+- evaluation_notes_for_paper.md
+
+Validation:
+- CCB rows = 9
+- primary rows = 27, ablation rows = 54 (check only)
+- key columns non-null: total_served, charging_deadline_miss_ratio, total_waiting_vehicles, peak_station_power_kw
+- explicitly state in notes: CCB is a capacity-constrained supplementary scenario and is not part of the primary paired significance conclusion.
 ```
