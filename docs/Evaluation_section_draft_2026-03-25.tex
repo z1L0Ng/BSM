@@ -1,0 +1,145 @@
+\section{Evaluation}
+
+\subsection{Evaluation Setup}
+We evaluate all methods under a strictly matched protocol.
+Passenger demand is constructed from NYC yellow taxi trip data (November 2025).
+The simulation window is fixed to 06:00--22:00 with 15-minute slots and receding horizon $H=64$.
+Because real battery swapping station operation logs are not available in this study, station-side operations are simulated with parameterized station resources (battery inventory, charging slots, and swap service capacity).
+All methods use the same demand input, seed policy, and three predefined resource settings.
+Evaluation dates are fixed to 2025-11-01, 2025-11-05, and 2025-11-09.
+
+We compare the proposed \textbf{COP} (Coordinated Optimization Policy) with three baselines:
+\textbf{FDB} (Fleet Dispatch Baseline),
+\textbf{HDB} (Heuristic Dispatch Baseline), and
+\textbf{ODB} (Oracle Dispatch Baseline).
+FDB performs fleet-level dispatch and sends low-energy taxis to swapping stations, while stations use first-come-first-served charging.
+HDB lets each taxi independently choose passenger-search actions and low-energy swapping decisions, while stations also use first-come-first-served charging.
+ODB uses oracle-style dispatch with future demand information while keeping the same first-come-first-served charging rule as HDB.
+We additionally define \textbf{CCB} (Capacity-Constrained Charging Baseline), which keeps fleet-level dispatch but constrains the maximum number of simultaneously active chargers (e.g., 90\% of nominal chargers); CCB quantitative results will be added after the incremental experiment run.
+
+The primary endpoint is total\_served; secondary metrics are used to characterize operational trade-offs.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Primary aggregate performance.}
+\label{tab:primary_aggregate}
+\begin{tabular}{lcc}
+\hline
+Method & total\_served & Charging Miss \\
+\hline
+COP & $77613.67 \pm 6455.29$ & 0.0715 \\
+HDB & $36284.33 \pm 3285.06$ & 0.1089 \\
+ODB & $67840.44 \pm 6051.73$ & 0.4404 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Primary Results}
+As shown in Fig.~\ref{fig:primary_served} and Table~\ref{tab:primary_aggregate},
+COP improves total\_served by $+113.9\%$ over HDB and $+14.4\%$ over ODB.
+
+The paired evidence is consistent:
+COP is higher than HDB in all 9 matched units and higher than ODB in all 9 matched units.
+Two-sided sign tests give $p=0.0039$ in both comparisons.
+
+The service gain is accompanied by trade-offs:
+COP shows lower swap success and higher swap deadline miss than the baselines,
+while achieving the lowest charging miss ratio.
+This is consistent with a service-priority operating regime under Eq.~(10), rather than uniform improvement on every metric.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{7pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Date-level robustness of total\_served (averaged over three resource settings).}
+\label{tab:date_robustness}
+\begin{tabular}{lrrr}
+\hline
+Date & COP & HDB & ODB \\
+\hline
+2025-11-01 & 80580 & 39149 & 65716 \\
+2025-11-05 & 83095 & 37703 & 75643 \\
+2025-11-09 & 69166 & 32001 & 62162 \\
+\hline
+\end{tabular}
+\end{table}
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{COP solver reliability (9 COP runs).}
+\label{tab:runtime}
+\begin{tabular}{lc}
+\hline
+Metric & Value \\
+\hline
+Avg reposition step runtime (mean $\pm$ std) & $10.20 \pm 0.52$ s \\
+Reposition step runtime max (mean over runs) & 16.80 s \\
+Worst observed per-run max & 21.79 s \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Ablation Evidence}
+From the ablation study, dispatch policy is the dominant source of total\_served variation, while charging-policy effects are secondary and mixed.
+FDB and CCB contrasts will be appended after the incremental baseline refresh is complete.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Ablation contrasts on total\_served.}
+\label{tab:ablation_contrast}
+\begin{tabular}{lr}
+\hline
+Contrast & Mean Delta \\
+\hline
+COP vs coordinated dispatch + rule charging & +171.1 \\
+Heuristic dispatch: optimized vs rule charging & -109.8 \\
+Oracle dispatch: optimized vs rule charging & 0.0 \\
+Dispatch effect under optimized charging & +41439.1 \\
+Dispatch effect under rule charging & +41158.2 \\
+\hline
+\end{tabular}
+\end{table}
+
+\subsection{Protocol-Aligned Time-Series Check}
+Figure~\ref{fig:ts_panel} shows a protocol-aligned replay on 2025-11-05
+under one representative resource setting, comparing COP and HDB.
+The cumulative served difference is $+44947$ (COP minus HDB), consistent with aggregate results.
+This replay is used for mechanism illustration, not as a replacement for paired statistical inference.
+
+\begin{figure}[t]
+  \centering
+  \includegraphics[width=0.98\linewidth]{figures/evaluation/fig1_primary_served.pdf}
+  \caption{Primary comparison on total\_served.}
+  \label{fig:primary_served}
+\end{figure}
+
+\begin{figure}[t]
+  \centering
+  \begin{minipage}{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/evaluation/fig3a_timeseries_served.pdf}\\[-1mm]
+    \scriptsize (a) Served
+  \end{minipage}\hfill
+  \begin{minipage}{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/evaluation/fig3b_timeseries_waiting.pdf}\\[-1mm]
+    \scriptsize (b) Waiting
+  \end{minipage}\hfill
+  \begin{minipage}{0.32\linewidth}
+    \centering
+    \includegraphics[width=\linewidth]{figures/evaluation/fig3c_timeseries_station_power.pdf}\\[-1mm]
+    \scriptsize (c) Station power
+  \end{minipage}
+  \caption{Protocol-aligned time-series check (COP vs HDB).}
+  \label{fig:ts_panel}
+\end{figure}
