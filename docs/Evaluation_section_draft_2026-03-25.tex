@@ -15,7 +15,7 @@ We compare the proposed \textbf{COP} (Coordinated Optimization Policy) with thre
 FDB performs fleet-level dispatch and sends low-energy taxis to swapping stations, while stations use first-come-first-served charging.
 HDB lets each taxi independently choose passenger-search actions and low-energy swapping decisions, while stations also use first-come-first-served charging.
 ODB uses oracle-style dispatch with future demand information while keeping the same first-come-first-served charging rule as HDB.
-We additionally define \textbf{CCB} (Capacity-Constrained Charging Baseline), which keeps fleet-level dispatch but constrains the maximum number of simultaneously active chargers (e.g., 90\% of nominal chargers); CCB quantitative results will be added after the incremental experiment run.
+We additionally define \textbf{CCB} (Capacity-Constrained Charging Baseline), which keeps fleet-level dispatch but constrains the maximum number of simultaneously active chargers (e.g., 90\% of nominal chargers).
 
 The primary endpoint is total\_served; secondary metrics are used to characterize operational trade-offs.
 
@@ -31,6 +31,7 @@ The primary endpoint is total\_served; secondary metrics are used to characteriz
 Method & total\_served & Charging Miss \\
 \hline
 COP & $77613.67 \pm 6455.29$ & 0.0715 \\
+FDB & $77442.56 \pm 6369.63$ & 0.0941 \\
 HDB & $36284.33 \pm 3285.06$ & 0.1089 \\
 ODB & $67840.44 \pm 6051.73$ & 0.4404 \\
 \hline
@@ -40,10 +41,12 @@ ODB & $67840.44 \pm 6051.73$ & 0.4404 \\
 \subsection{Primary Results}
 As shown in Fig.~\ref{fig:primary_served} and Table~\ref{tab:primary_aggregate},
 COP improves total\_served by $+113.9\%$ over HDB and $+14.4\%$ over ODB.
+Compared with FDB, COP improves total\_served by $+0.22\%$.
 
 The paired evidence is consistent:
 COP is higher than HDB in all 9 matched units and higher than ODB in all 9 matched units.
 Two-sided sign tests give $p=0.0039$ in both comparisons.
+Against FDB, COP is higher in 6 matched units and lower in 3, with no significant paired difference ($p=0.5078$).
 
 The service gain is accompanied by trade-offs:
 COP shows lower swap success and higher swap deadline miss than the baselines,
@@ -57,13 +60,13 @@ This is consistent with a service-priority operating regime under Eq.~(10), rath
 \renewcommand{\arraystretch}{1.05}
 \caption{Date-level robustness of total\_served (averaged over three resource settings).}
 \label{tab:date_robustness}
-\begin{tabular}{lrrr}
+\begin{tabular}{lrrrr}
 \hline
-Date & COP & HDB & ODB \\
+Date & COP & FDB & HDB & ODB \\
 \hline
-2025-11-01 & 80580 & 39149 & 65716 \\
-2025-11-05 & 83095 & 37703 & 75643 \\
-2025-11-09 & 69166 & 32001 & 62162 \\
+2025-11-01 & 80580 & 79969 & 39149 & 65716 \\
+2025-11-05 & 83095 & 83162 & 37703 & 75643 \\
+2025-11-09 & 69166 & 69196 & 32001 & 62162 \\
 \hline
 \end{tabular}
 \end{table}
@@ -88,7 +91,7 @@ Worst observed per-run max & 21.79 s \\
 
 \subsection{Ablation Evidence}
 From the ablation study, dispatch policy is the dominant source of total\_served variation, while charging-policy effects are secondary and mixed.
-FDB and CCB contrasts will be appended after the incremental baseline refresh is complete.
+The direct COP vs FDB ablation contrast is $+171.1$ served trips on average, consistent with the small aggregate gain above.
 
 \begin{table}[t]
 \centering
@@ -101,7 +104,7 @@ FDB and CCB contrasts will be appended after the incremental baseline refresh is
 \hline
 Contrast & Mean Delta \\
 \hline
-COP vs coordinated dispatch + rule charging & +171.1 \\
+COP vs FDB (fleet dispatch + FCFS charging) & +171.1 \\
 Heuristic dispatch: optimized vs rule charging & -109.8 \\
 Oracle dispatch: optimized vs rule charging & 0.0 \\
 Dispatch effect under optimized charging & +41439.1 \\
@@ -109,6 +112,34 @@ Dispatch effect under rule charging & +41158.2 \\
 \hline
 \end{tabular}
 \end{table}
+
+\subsection{Capacity-Constrained Scenario}
+We evaluate CCB (Capacity-Constrained Charging Baseline) in a supplemental scenario.
+CCB keeps fleet-level dispatch with FCFS charging but limits active chargers to an integerized cap90 setting (3$\rightarrow$2 and 5$\rightarrow$4 chargers per station across resource settings).
+This scenario changes available infrastructure capacity and is therefore reported as a supplemental robustness check rather than part of the primary paired-significance conclusion.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{6pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Capacity-constrained summary (CCB, 9 runs).}
+\label{tab:ccb_summary}
+\begin{tabular}{lccc}
+\hline
+Metric & CCB & FDB & COP \\
+\hline
+total\_served & 35970.78 & 77442.56 & 77613.67 \\
+charging miss & 0.2501 & 0.0941 & 0.0715 \\
+waiting vehicles & 589.33 & 8871.67 & 11045.67 \\
+peak station power (kW) & 100.0 & 130.0 & 130.0 \\
+\hline
+\end{tabular}
+\end{table}
+
+Under CCB, mean total\_served drops by $-53.55\%$ relative to FDB and $-53.65\%$ relative to COP.
+Charging miss increases substantially, while peak station power is reduced by 30~kW.
+The lower waiting count under CCB should be interpreted jointly with the large service drop.
 
 \subsection{Protocol-Aligned Time-Series Check}
 Figure~\ref{fig:ts_panel} shows a protocol-aligned replay on 2025-11-05
