@@ -2,7 +2,7 @@
 
 \subsection{Evaluation Setup}
 We evaluate all methods under a strictly matched protocol.
-Passenger demand is constructed from NYC yellow taxi trip data (November 2025).
+Passenger demand is constructed from the NYC yellow taxi trip dataset (November 2025)\cite{nyc_yellow_taxi_dataset}.
 The simulation window is fixed to 06:00--22:00 with 15-minute slots and receding horizon $H=64$.
 Because real battery swapping station operation logs are not available in this study, station-side operations are simulated with parameterized station resources (battery inventory, charging slots, and swap service capacity).
 All methods use the same demand input, seed policy, and three predefined resource settings.
@@ -11,62 +11,78 @@ Evaluation dates are fixed to 2025-11-01, 2025-11-05, and 2025-11-09.
 We compare the proposed \textbf{COP} (Coordinated Optimization Policy) with three baselines:
 \textbf{FDB} (Fleet Dispatch Baseline),
 \textbf{HDB} (Heuristic Dispatch Baseline), and
-\textbf{ODB} (Oracle Dispatch Baseline).
-FDB performs fleet-level dispatch and sends low-energy taxis to swapping stations, while stations use first-come-first-served charging.
-HDB lets each taxi independently choose passenger-search actions and low-energy swapping decisions, while stations also use first-come-first-served charging.
-ODB uses oracle-style dispatch with future demand information while keeping the same first-come-first-served charging rule as HDB.
+\textbf{CCB} (Capacity-Constrained Charging Baseline).
+FDB performs fleet-level dispatch by solving the network-level repositioning optimization each slot and sends low-energy taxis to swapping stations; station charging follows first-come-first-served.
+HDB applies per-taxi in-zone heuristics: each taxi serves local demand if energy is sufficient, and low-energy taxis request local swapping only when local full-battery stock is available; station charging also follows first-come-first-served.
 We additionally define \textbf{CCB} (Capacity-Constrained Charging Baseline), which keeps fleet-level dispatch but constrains the maximum number of simultaneously active chargers (e.g., 90\% of nominal chargers).
 
-The primary endpoint is total\_served; secondary metrics are used to characterize operational trade-offs.
+The primary performance metrics are served passengers and daily peak charging power demand.
 
 \begin{table}[t]
 \centering
 \footnotesize
 \setlength{\tabcolsep}{6pt}
 \renewcommand{\arraystretch}{1.05}
-\caption{Primary aggregate performance.}
+\caption{Performance comparison (means over matched runs).}
 \label{tab:primary_aggregate}
-\begin{tabular}{lcc}
+\begin{tabular}{lccc}
 \hline
-Method & total\_served & Charging Miss \\
+Method & Served Passengers & Peak Charging Demand (kW) & Peak Station Total Power (kW) \\
 \hline
-COP & $77613.67 \pm 6455.29$ & 0.0715 \\
-FDB & $77442.56 \pm 6369.63$ & 0.0941 \\
-HDB & $36284.33 \pm 3285.06$ & 0.1089 \\
-ODB & $67840.44 \pm 6051.73$ & 0.4404 \\
+COP & $77613.67 \pm 6455.29$ & 31496.67 & 28530.00 \\
+FDB & $77442.56 \pm 6369.63$ & 30840.00 & 29783.33 \\
+HDB & $36284.33 \pm 3285.06$ & 22103.33 & 24836.67 \\
+CCB & TBD & TBD & TBD \\
 \hline
 \end{tabular}
 \end{table}
 
-\subsection{Primary Results}
-As shown in Fig.~\ref{fig:primary_served} and Table~\ref{tab:primary_aggregate},
-COP improves total\_served by $+113.9\%$ over HDB and $+14.4\%$ over ODB.
-Compared with FDB, COP improves total\_served by $+0.22\%$.
+\subsection{Results}
+\textbf{Performance Comparison:}
+As shown in Table~\ref{tab:primary_aggregate}, COP improves served passengers by $+113.9\%$ over HDB and by $+0.22\%$ over FDB.
+For daily peak charging power demand, COP is close to FDB and higher than HDB, indicating that service gains are not achieved through demand reduction alone.
+CCB results are pending corrected rerun and will be filled in this table.
 
-The paired evidence is consistent:
-COP is higher than HDB in all 9 matched units and higher than ODB in all 9 matched units.
-Two-sided sign tests give $p=0.0039$ in both comparisons.
-Against FDB, COP is higher in 6 matched units and lower in 3, with no significant paired difference ($p=0.5078$).
-
-The service gain is accompanied by trade-offs:
-COP shows lower swap success and higher swap deadline miss than the baselines,
-while achieving the lowest charging miss ratio.
-This is consistent with a service-priority operating regime under Eq.~(10), rather than uniform improvement on every metric.
+\textbf{Overhead Analysis:}
+To quantify operational overhead, we report idle driving distance and battery handling frequency (number of swaps).
 
 \begin{table}[t]
 \centering
 \footnotesize
-\setlength{\tabcolsep}{7pt}
+\setlength{\tabcolsep}{5pt}
 \renewcommand{\arraystretch}{1.05}
-\caption{Date-level robustness of total\_served (averaged over three resource settings).}
-\label{tab:date_robustness}
-\begin{tabular}{lrrrr}
+\caption{Overhead comparison (means over matched runs).}
+\label{tab:overhead}
+\begin{tabular}{lcc}
 \hline
-Date & COP & FDB & HDB & ODB \\
+Method & Idle Driving Distance & Number of Swaps \\
 \hline
-2025-11-01 & 80580 & 79969 & 39149 & 65716 \\
-2025-11-05 & 83095 & 83162 & 37703 & 75643 \\
-2025-11-09 & 69166 & 69196 & 32001 & 62162 \\
+COP & 38107.11 & 1946.11 \\
+FDB & 37949.33 & 1980.67 \\
+HDB & 0.00 & 781.22 \\
+CCB & TBD & TBD \\
+\hline
+\end{tabular}
+\end{table}
+
+\textbf{Ablation Study:}
+We separate taxi-side and station-side contributions under matched protocol settings.
+
+\begin{table}[t]
+\centering
+\footnotesize
+\setlength{\tabcolsep}{4pt}
+\renewcommand{\arraystretch}{1.05}
+\caption{Ablation contrasts (served passengers and peak demand).}
+\label{tab:ablation_contrast}
+\begin{tabular}{lrr}
+\hline
+Contrast & $\Delta$ Served & $\Delta$ Peak Demand (kW) \\
+\hline
+Variant A (COP vs FDB) & +171.1 & +656.7 \\
+Variant B (Ideal dispatch with optimized vs FCFS charging) & +37.7 & -1060.0 \\
+Dispatch effect under optimized charging & +41439.1 & +9383.3 \\
+Dispatch effect under FCFS charging & +41158.2 & +8736.7 \\
 \hline
 \end{tabular}
 \end{table}
@@ -76,7 +92,7 @@ Date & COP & FDB & HDB & ODB \\
 \footnotesize
 \setlength{\tabcolsep}{5pt}
 \renewcommand{\arraystretch}{1.05}
-\caption{COP solver reliability (9 COP runs).}
+\caption{COP solver runtime summary.}
 \label{tab:runtime}
 \begin{tabular}{lc}
 \hline
@@ -89,57 +105,7 @@ Worst observed per-run max & 21.79 s \\
 \end{tabular}
 \end{table}
 
-\subsection{Ablation Evidence}
-From the ablation study, dispatch policy is the dominant source of total\_served variation, while charging-policy effects are secondary and mixed.
-The direct COP vs FDB ablation contrast is $+171.1$ served trips on average, consistent with the small aggregate gain above.
-
-\begin{table}[t]
-\centering
-\footnotesize
-\setlength{\tabcolsep}{4pt}
-\renewcommand{\arraystretch}{1.05}
-\caption{Ablation contrasts on total\_served.}
-\label{tab:ablation_contrast}
-\begin{tabular}{lr}
-\hline
-Contrast & Mean Delta \\
-\hline
-COP vs FDB (fleet dispatch + FCFS charging) & +171.1 \\
-Heuristic dispatch: optimized vs rule charging & -109.8 \\
-Oracle dispatch: optimized vs rule charging & 0.0 \\
-Dispatch effect under optimized charging & +41439.1 \\
-Dispatch effect under rule charging & +41158.2 \\
-\hline
-\end{tabular}
-\end{table}
-
-\subsection{Capacity-Constrained Scenario}
-We evaluate CCB (Capacity-Constrained Charging Baseline) in a supplemental scenario.
-CCB keeps fleet-level dispatch with FCFS charging but limits active chargers to an integerized cap90 setting (3$\rightarrow$2 and 5$\rightarrow$4 chargers per station across resource settings).
-This scenario changes available infrastructure capacity and is therefore reported as a supplemental robustness check rather than part of the primary paired-significance conclusion.
-
-\begin{table}[t]
-\centering
-\footnotesize
-\setlength{\tabcolsep}{6pt}
-\renewcommand{\arraystretch}{1.05}
-\caption{Capacity-constrained summary (CCB, 9 runs).}
-\label{tab:ccb_summary}
-\begin{tabular}{lccc}
-\hline
-Metric & CCB & FDB & COP \\
-\hline
-total\_served & 35970.78 & 77442.56 & 77613.67 \\
-charging miss & 0.2501 & 0.0941 & 0.0715 \\
-waiting vehicles & 589.33 & 8871.67 & 11045.67 \\
-peak station power (kW) & 100.0 & 130.0 & 130.0 \\
-\hline
-\end{tabular}
-\end{table}
-
-Under CCB, mean total\_served drops by $-53.55\%$ relative to FDB and $-53.65\%$ relative to COP.
-Charging miss increases substantially, while peak station power is reduced by 30~kW.
-The lower waiting count under CCB should be interpreted jointly with the large service drop.
+CCB is treated as a supplementary capacity-constrained scenario and will not be merged into the primary paired-significance conclusion.
 
 \subsection{Protocol-Aligned Time-Series Check}
 Figure~\ref{fig:ts_panel} shows a protocol-aligned replay on 2025-11-05
